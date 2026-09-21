@@ -1,34 +1,85 @@
 package routes
 
 import (
-	"github.com/gin-gonic/gin"
+	"time"
+
 	"quietsignal/backend/controllers"
 	"quietsignal/backend/middleware"
+
+	"github.com/gin-gonic/gin"
 )
 
 type Dependencies struct {
-	Posts  *controllers.PostController
-	Tags   *controllers.TagController
-	Auth   *controllers.AuthController
-	Secret string
+	Posts        *controllers.PostController
+	Community    *controllers.CommunityController
+	Interactions *controllers.InteractionController
+	Tags         *controllers.TagController
+	Auth         *controllers.AuthController
+	Secret       string
 }
 
 func Register(r *gin.Engine, deps Dependencies) {
+	// 限流：登录注册按 IP 每分钟 10 次，发文、评论、点赞、收藏、举报等写操作每分钟 30 次
+	authLimit := middleware.RateLimit(10, time.Minute)
+	writeLimit := middleware.RateLimit(30, time.Minute)
+
 	api := r.Group("/api")
 	api.GET("/health", func(c *gin.Context) { c.JSON(200, gin.H{"code": 0, "message": "ok"}) })
-	api.POST("/auth/login", deps.Auth.Login)
+	api.POST("/auth/register", authLimit, deps.Auth.Register)
+	api.POST("/auth/login", authLimit, deps.Auth.Login)
 	api.POST("/auth/logout", deps.Auth.Logout)
-	api.GET("/posts", deps.Posts.List)
-	api.GET("/posts/:slug", deps.Posts.Detail)
+	api.GET("/auth/me", middleware.RequireAuth(deps.Secret), deps.Auth.Me)
+	api.PATCH("/me/profile", middleware.RequireAuth(deps.Secret), deps.Auth.UpdateProfile)
+	api.PATCH("/me/password", middleware.RequireAuth(deps.Secret), deps.Auth.UpdatePassword)
+	api.GET("/me/posts", middleware.RequireAuth(deps.Secret), deps.Interactions.MyPosts)
+	api.GET("/me/favorites", middleware.RequireAuth(deps.Secret), deps.Interactions.MyFavorites)
+	api.GET("/notifications", middleware.RequireAuth(deps.Secret), deps.Interactions.Notifications)
+	api.PATCH("/notifications/:id/read", middleware.RequireAuth(deps.Secret), deps.Interactions.MarkNotificationRead)
+	api.POST("/reports", writeLimit, middleware.RequireAuth(deps.Secret), deps.Interactions.CreateReport)
+	api.GET("/categories", deps.Interactions.ListCategories)
+	api.GET("/feed", middleware.OptionalAuth(deps.Secret), deps.Community.Feed)
+	api.GET("/users/:username", middleware.OptionalAuth(deps.Secret), deps.Community.Profile)
+	api.POST("/users/:id/follow", writeLimit, middleware.RequireAuth(deps.Secret), deps.Community.FollowUser)
+	api.DELETE("/users/:id/follow", middleware.RequireAuth(deps.Secret), deps.Community.UnfollowUser)
+	api.GET("/posts", middleware.OptionalAuth(deps.Secret), deps.Posts.List)
+	api.POST("/posts", writeLimit, middleware.RequireAuth(deps.Secret), deps.Community.CreatePost)
+	api.GET("/posts/id/:id", middleware.RequireAuth(deps.Secret), deps.Interactions.OwnerPostDetail)
+	api.PUT("/posts/id/:id", writeLimit, middleware.RequireAuth(deps.Secret), deps.Community.UpdatePost)
+	api.DELETE("/posts/id/:id", writeLimit, middleware.RequireAuth(deps.Secret), deps.Community.DeletePost)
+	api.GET("/posts/:slug", middleware.OptionalAuth(deps.Secret), deps.Posts.Detail)
+	api.POST("/posts/:slug/views", deps.Posts.RecordView)
+	api.POST("/posts/:slug/favorite", writeLimit, middleware.RequireAuth(deps.Secret), deps.Interactions.FavoritePost)
+	api.DELETE("/posts/:slug/favorite", writeLimit, middleware.RequireAuth(deps.Secret), deps.Interactions.UnfavoritePost)
+	api.GET("/posts/:slug/comments", deps.Community.ListComments)
+	api.POST("/posts/:slug/comments", writeLimit, middleware.RequireAuth(deps.Secret), deps.Community.CreateComment)
+	api.POST("/posts/:slug/like", writeLimit, middleware.RequireAuth(deps.Secret), deps.Community.LikePost)
+	api.DELETE("/posts/:slug/like", writeLimit, middleware.RequireAuth(deps.Secret), deps.Community.UnlikePost)
+	api.POST("/comments/:id/like", writeLimit, middleware.RequireAuth(deps.Secret), deps.Interactions.LikeComment)
+	api.DELETE("/comments/:id/like", writeLimit, middleware.RequireAuth(deps.Secret), deps.Interactions.UnlikeComment)
+	api.DELETE("/comments/:id", writeLimit, middleware.RequireAuth(deps.Secret), deps.Community.DeleteComment)
 	api.GET("/tags", deps.Tags.List)
 
-	admin := api.Group("/admin", middleware.RequireAuth(deps.Secret))
+	admin := api.Group("/admin", middleware.RequireAdmin(deps.Secret))
 	admin.GET("/posts", deps.Posts.AdminList)
+	admin.GET("/stats", deps.Community.UserStats)
+	admin.GET("/users", deps.Community.AdminUsers)
+	admin.PATCH("/users/:id", deps.Community.UpdateUser)
 	admin.GET("/posts/:id", deps.Posts.AdminDetail)
 	admin.POST("/posts", deps.Posts.Create)
 	admin.PUT("/posts/:id", deps.Posts.Update)
 	admin.DELETE("/posts/:id", deps.Posts.Delete)
 	admin.PATCH("/posts/:id/status", deps.Posts.UpdateStatus)
+	admin.PATCH("/posts/:id/moderation", deps.Posts.UpdateModeration)
+	admin.GET("/comments", deps.Community.AdminComments)
+	admin.PATCH("/comments/:id/status", deps.Community.AdminUpdateCommentStatus)
+	admin.GET("/reports", deps.Interactions.AdminReports)
+	admin.PATCH("/reports/:id", deps.Interactions.AdminHandleReport)
+	admin.GET("/logs", deps.Interactions.AdminLogs)
+	admin.GET("/settings", deps.Interactions.AdminSettings)
+	admin.PATCH("/settings", deps.Interactions.AdminUpdateSettings)
+	admin.GET("/tags", deps.Interactions.AdminTags)
+	admin.POST("/categories", deps.Interactions.CreateCategory)
+	admin.DELETE("/categories/:id", deps.Interactions.DeleteCategory)
+	admin.DELETE("/tags/:id", deps.Interactions.DeleteTag)
 	admin.GET("/me", deps.Auth.Me)
-	api.GET("/auth/me", middleware.RequireAuth(deps.Secret), deps.Auth.Me)
 }

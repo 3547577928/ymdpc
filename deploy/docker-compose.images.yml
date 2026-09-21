@@ -1,8 +1,6 @@
 services:
   backend:
-    build:
-      context: ../backend
-      dockerfile: Dockerfile
+    image: quietsignal-backend:latest
     restart: unless-stopped
     environment:
       GIN_MODE: release
@@ -17,9 +15,7 @@ services:
       - sqlite_data:/data
 
   frontend:
-    build:
-      context: ../frontend
-      dockerfile: Dockerfile
+    image: quietsignal-frontend:latest
     restart: unless-stopped
     depends_on:
       - backend

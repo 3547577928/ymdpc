@@ -1,19 +1,21 @@
-import { ArrowDownRight, ArrowUpRight, Command, MoveUpRight } from 'lucide-react'
+import { ArrowDownRight, ArrowUpRight, Command } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useEffect, useMemo, useState } from 'react'
 import { PostCard } from '../components/PostCard'
 import { SectionHeading } from '../components/SectionHeading'
-import { getPosts } from '../services/api'
-import type { Post } from '../types'
+import { CoverImage } from '../components/CoverImage'
+import { getFeed } from '../services/api'
+import type { PostSummary } from '../types'
 import { formatDate } from '../utils'
 
 export function HomePage() {
-  const [posts, setPosts] = useState<Post[]>([])
+  const currentYear = new Date().getFullYear()
+  const [posts, setPosts] = useState<PostSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
   useEffect(() => {
-    getPosts({ pageSize: 12 })
+    getFeed({ mode: 'latest', pageSize: 12 })
       .then((data) => setPosts(data.items))
       .catch((reason: Error) => setError(reason.message))
       .finally(() => setLoading(false))
@@ -30,17 +32,17 @@ export function HomePage() {
     <>
       <section className="home-intro container">
         <div className="intro-copy">
-          <div className="eyebrow">独立开发者 / 产品设计 / 代码实践</div>
+          <div className="eyebrow">独立开发者 / 产品设计 / 代码实践 / 社区讨论</div>
           <h1>把复杂的事，<br /><em>写得清楚一点。</em></h1>
-          <p className="intro-lead">你好，我是 Yiming。这里是我的个人博客，记录界面、系统和生活里那些值得慢慢想清楚的部分。</p>
+          <p className="intro-lead">你好，我是 Yiming。这里是 Quiet Signal 社区，记录界面、系统和生活里那些值得慢慢想清楚的部分。</p>
           <div className="intro-actions">
-            <Link className="button button-dark" to="/posts">浏览全部文章 <ArrowUpRight size={16} /></Link>
+            <Link className="button button-dark" to="/posts">进入社区文章 <ArrowUpRight size={16} /></Link>
             <Link className="text-button" to="/about">了解我 <ArrowUpRight size={15} /></Link>
           </div>
         </div>
         <div className="intro-signal" aria-label="个人博客视觉标识">
           <div className="signal-frame">
-            <div className="signal-topline"><span>QS / 2026</span><span>01—04</span></div>
+            <div className="signal-topline"><span>QUIET SIGNAL</span><span>{currentYear}</span></div>
             <div className="signal-core">
               <div className="signal-letter">Y</div>
               <div className="signal-cross" />
@@ -53,10 +55,10 @@ export function HomePage() {
       </section>
 
       <section className="container featured-section">
-        <SectionHeading eyebrow="Selected note" title="精选文章" action={<Link className="section-link" to={`/posts/${featured.slug}`}>打开精选 <ArrowUpRight size={15} /></Link>} />
+        <SectionHeading eyebrow="Selected note" title="精选文章" action={<Link className="section-link" to={`/posts/${featured.slug}`}>阅读全文 <ArrowUpRight size={15} /></Link>} />
         <div className="featured-layout">
           <div className="featured-visual">
-            <img src={featured.coverImage} alt="" />
+            <CoverImage src={featured.coverImage} title={featured.title} />
             <span className="featured-index">01</span>
           </div>
           <div className="featured-copy">
@@ -64,7 +66,6 @@ export function HomePage() {
             <h3><Link to={`/posts/${featured.slug}`}>{featured.title}</Link></h3>
             <p>{featured.summary}</p>
             <div className="tag-row">{featured.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}</div>
-            <Link className="round-link" to={`/posts/${featured.slug}`} aria-label="阅读精选文章"><MoveUpRight size={19} /></Link>
           </div>
         </div>
       </section>
