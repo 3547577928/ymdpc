@@ -1,5 +1,12 @@
 import { ArrowUpRight, Code2, Figma, Github, Mail, MapPin, Sparkles } from 'lucide-react'
 
+// 构建信息由构建流程注入，见 vite.config.ts，用于确认线上运行的是哪一个版本
+const buildMeta = [
+  { label: '版本号', value: __APP_VERSION__ },
+  { label: '打包时间', value: new Date(__BUILD_TIME__).toLocaleString('zh-CN', { hour12: false }) },
+  { label: '运行平台', value: __BUILD_PLATFORM__ },
+]
+
 export function AboutPage() {
   return (
     <section className="container about-page">
@@ -10,6 +17,7 @@ export function AboutPage() {
       </div>
       <div className="about-section"><div className="eyebrow">Working notes</div><h2>我在意的事情</h2><div className="principles"><div><span>01</span><h3>清晰胜过聪明</h3><p>让下一个接手的人能够快速理解，比写出一个技巧性很强的实现更重要。</p></div><div><span>02</span><h3>保持完整闭环</h3><p>从数据到界面，从异常状态到部署，尽量把一个问题真正做完。</p></div><div><span>03</span><h3>给注意力留白</h3><p>减少不必要的通知、装饰和流程，把时间还给真正重要的事情。</p></div></div></div>
       <div className="about-cta"><div><div className="eyebrow">Say hello</div><h2>有一个问题，或者只是想聊聊？</h2></div><a className="button button-dark" href="mailto:hello@quietsig.dev">发一封邮件 <ArrowUpRight size={16} /></a></div>
+      <div className="about-build"><div className="eyebrow">Build info</div><h2>当前运行的版本</h2><div className="build-info-grid">{buildMeta.map((item) => <div key={item.label}><span>{item.label}</span><strong>{item.value}</strong></div>)}</div></div>
     </section>
   )
 }

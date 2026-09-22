@@ -17,8 +17,10 @@ jobs:
         include:
           - name: backend
             context: ./backend
+          # build_args 只在有消费方的镜像上传，前端用它把版本号打进关于页，后端不消费
           - name: frontend
             context: ./frontend
+            build_args: APP_VERSION=${{ github.ref_name }}
     steps:
       - name: 拉取代码
         uses: actions/checkout@v4
@@ -43,6 +45,7 @@ jobs:
           context: ${{ matrix.context }}
           push: true
           platforms: linux/amd64
+          build-args: ${{ matrix.build_args }}
           provenance: false
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.name }}-${{ steps.ver.outputs.version }}
