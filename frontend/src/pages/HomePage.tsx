@@ -32,21 +32,21 @@ export function HomePage() {
     <>
       <section className="home-intro container">
         <div className="intro-copy">
-          <div className="eyebrow">独立开发者 / 产品设计 / 代码实践 / 社区讨论</div>
+          <div className="eyebrow">界面 / 系统 / 代码实践 / 社区讨论</div>
           <h1>把复杂的事，<br /><em>写得清楚一点。</em></h1>
-          <p className="intro-lead">你好，我是 Yiming。这里是 Quiet Signal 社区，记录界面、系统和生活里那些值得慢慢想清楚的部分。</p>
+          <p className="intro-lead">Quiet Signal 是一个安静的写作社区，记录界面、系统和生活里那些值得慢慢想清楚的部分。</p>
           <div className="intro-actions">
             <Link className="button button-dark" to="/posts">进入社区文章 <ArrowUpRight size={16} /></Link>
-            <Link className="text-button" to="/about">了解我 <ArrowUpRight size={15} /></Link>
+            <Link className="text-button" to="/about">了解社区 <ArrowUpRight size={15} /></Link>
           </div>
         </div>
-        <div className="intro-signal" aria-label="个人博客视觉标识">
+        <div className="intro-signal" aria-label="社区视觉标识">
           <div className="signal-frame">
             <div className="signal-topline"><span>QUIET SIGNAL</span><span>{currentYear}</span></div>
             <div className="signal-core">
-              <div className="signal-letter">Y</div>
+              <div className="signal-letter">Q</div>
               <div className="signal-cross" />
-              <div className="signal-letter signal-letter-right">M</div>
+              <div className="signal-letter signal-letter-right">S</div>
             </div>
             <div className="signal-bottomline"><span>QUIET SIGNAL</span><span>BUILD / WRITE / OBSERVE</span></div>
           </div>

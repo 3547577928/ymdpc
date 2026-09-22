@@ -1,8 +1,8 @@
 export function BrandMark() {
   return (
     <span className="brand-mark" aria-hidden="true">
-      <span>Y</span>
-      <span>M</span>
+      <span>Q</span>
+      <span>S</span>
     </span>
   )
 }

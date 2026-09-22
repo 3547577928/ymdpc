@@ -76,7 +76,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
         <div className="container footer-inner">
           <div>
             <div className="footer-title">Keep making things quieter.</div>
-            <p>写代码、做产品，也记录那些还没有答案的问题。</p>
+            <p>一个安静的写作社区：写下界面的细节、系统的取舍，以及还没有答案的问题。</p>
           </div>
           <div className="footer-links">
             <a href="https://github.com" target="_blank" rel="noreferrer" aria-label="GitHub"><Github size={17} /></a>
