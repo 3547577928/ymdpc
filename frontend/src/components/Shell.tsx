@@ -1,14 +1,19 @@
-import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom'
-import { Bell, FileText, Github, House, Info, LogIn, Mail, PenLine, Rss, UserCircle, UserPlus } from 'lucide-react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Bell, FileText, Github, House, Info, LogIn, Mail, PenLine, Rss, UserCircle, UserPlus, type LucideIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { BrandMark } from './BrandMark'
 import { getCurrentUser, getNotifications, logout, type AuthUser } from '../services/api'
 
-const navItems = [
+type NavItem = { to: string; label: string; icon: LucideIcon }
+
+const navItems: NavItem[] = [
   { to: '/', label: '首页', icon: House },
   { to: '/posts', label: '文章', icon: FileText },
   { to: '/about', label: '关于', icon: Info },
 ]
+
+// 关注 feed 和文章列表共用 /posts，只靠 mode 参数区分，单独列出便于计算选中态
+const followingNavItem: NavItem = { to: '/posts?mode=following', label: '关注', icon: Rss }
 
 export function Shell({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser>()
@@ -16,6 +21,15 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const location = useLocation()
   const navigate = useNavigate()
   const transitionKey = `${location.key}-${location.pathname}${location.search}`
+
+  // /posts 同时承载文章列表和关注 feed，选中项只能结合 mode 参数判断，否则两个导航图标会同时高亮
+  const activeNavTo = location.pathname === '/posts' && new URLSearchParams(location.search).get('mode') === 'following' ? followingNavItem.to : location.pathname
+  const navIconLink = ({ to, label, icon: Icon }: NavItem) => {
+    const [path] = to.split('?')
+    // 首页要求完全匹配，“文章”这类入口在其子路径（如 /posts/:slug）下也保持选中
+    const active = to === activeNavTo || (!to.includes('?') && path !== '/' && location.pathname.startsWith(`${path}/`))
+    return <Link key={to} className={active ? 'nav-icon-link active' : 'nav-icon-link'} data-tooltip={label} aria-label={label} aria-current={active ? 'page' : undefined} to={to}><Icon size={17} strokeWidth={1.8} /></Link>
+  }
 
   useEffect(() => {
     getCurrentUser().then(setUser).catch(() => setUser(undefined))
@@ -49,13 +63,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </Link>
 
           <nav className="primary-nav">
-            {navItems.map((item) => {
-              const Icon = item.icon
-              return <NavLink key={item.to} className="nav-icon-link" data-tooltip={item.label} aria-label={item.label} to={item.to} end={item.to === '/'}>
-                <Icon size={17} strokeWidth={1.8} />
-              </NavLink>
-            })}
-            {user && <NavLink className="nav-icon-link" data-tooltip="关注" aria-label="关注" to="/posts?mode=following"><Rss size={17} strokeWidth={1.8} /></NavLink>}
+            {navItems.map(navIconLink)}
+            {user && navIconLink(followingNavItem)}
             {user ? <><Link className="nav-icon-link nav-write" data-tooltip="写文章" aria-label="写文章" to="/write"><PenLine size={17} strokeWidth={1.8} /></Link><Link className="nav-icon-link nav-bell" data-tooltip="通知中心" to="/notifications" aria-label="通知中心"><Bell size={17} strokeWidth={1.8} />{unread > 0 && <span className="nav-bell-badge">{unread > 99 ? '99+' : unread}</span>}</Link><details className="nav-user-menu"><summary className="nav-icon-summary" data-tooltip={`${user.nickname}菜单`} aria-label={`${user.nickname}菜单`}><UserCircle size={17} strokeWidth={1.8} /></summary><div className="nav-dropdown"><Link to={`/users/${user.username}`}>个人主页</Link><Link to="/me/posts">我的文章</Link><Link to="/me/posts?status=draft">草稿箱</Link><Link to="/me/favorites">我的收藏</Link><Link to="/settings/profile">账号设置</Link><button className="nav-signout" onClick={() => void signOut()}>退出登录</button></div></details></> : <><Link className="nav-icon-link nav-user" data-tooltip="登录" aria-label="登录" to="/login"><LogIn size={17} strokeWidth={1.8} /></Link><Link className="nav-icon-link nav-write" data-tooltip="注册" aria-label="注册" to="/register"><UserPlus size={17} strokeWidth={1.8} /></Link></>}
           </nav>
         </div>
