@@ -1,5 +1,5 @@
 /Volumes/extra/gocode/ymdpc/.github/workflows/docker.yml
-name: 构建并推送镜像到阿里云 ACR
+
 
 on:
   push:
