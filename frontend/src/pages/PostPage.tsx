@@ -1,7 +1,7 @@
-import { ArrowLeft, ArrowRight, Bookmark, CalendarDays, Clock3, Eye, Flag, Heart, MessageCircle, Pencil, Share2, UserPlus, UserRoundCheck, Trash2 } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bookmark, CalendarDays, ChevronDown, ChevronRight, Clock3, Eye, Flag, Heart, MessageCircle, Pencil, Pin, Share2, UserPlus, UserRoundCheck, Trash2 } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
 import { useEffect, useMemo, useState } from 'react'
-import { createComment, createReport, deleteComment, favoritePost, followUser, getComments, getCurrentUser, getPostBySlug, getUserProfile, likeComment, likePost, recordPostView, unfavoritePost, unfollowUser, unlikeComment, unlikePost, type AdjacentPost, type AuthUser } from '../services/api'
+import { createComment, createReport, deleteComment, favoritePost, followUser, getComments, getCurrentUser, getPostBySlug, getUserProfile, likeComment, likePost, pinComment, recordPostView, unfavoritePost, unfollowUser, unlikeComment, unlikePost, type AdjacentPost, type AuthUser } from '../services/api'
 import { CoverImage } from '../components/CoverImage'
 import { ConfirmDialog, NoticeDialog, PromptDialog } from '../components/Dialog'
 import { MarkdownContent } from '../components/MarkdownContent'
@@ -53,6 +53,7 @@ export function PostPage() {
   const [notice, setNotice] = useState<{ title: string; message: string }>()
   const [deleteRequest, setDeleteRequest] = useState<Comment>()
   const [readProgress, setReadProgress] = useState(0)
+  const [collapsedThreads, setCollapsedThreads] = useState<Set<number>>(new Set())
   const headings = useMemo(() => extractMarkdownHeadings(post?.content ?? ''), [post?.content])
 
   useEffect(() => {
@@ -211,6 +212,24 @@ export function PostPage() {
     }
   }
 
+  const togglePinned = async (comment: Comment) => {
+    try {
+      const result = await pinComment(comment.id, !comment.pinned)
+      setComments((current) => current.map((item) => item.id === comment.id ? { ...item, pinned: result.pinned } : item))
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '更新置顶状态失败')
+    }
+  }
+
+  const toggleThread = (commentID: number) => {
+    setCollapsedThreads((current) => {
+      const next = new Set(current)
+      if (next.has(commentID)) next.delete(commentID)
+      else next.add(commentID)
+      return next
+    })
+  }
+
   if (loading) return <div className="container page-state"><span className="eyebrow">Loading article</span><h1>正在读取文章。</h1></div>
   if (error) return <div className="container page-state"><span className="eyebrow">Connection error</span><h1>文章暂时无法加载。</h1><p>{error}</p></div>
 
@@ -222,9 +241,9 @@ export function PostPage() {
     <div className={`comment-item ${isReply ? 'is-reply' : ''}`} key={comment.id}>
       <div className="comment-avatar">{comment.author.avatar ? <img src={comment.author.avatar} alt="" /> : comment.author.nickname.slice(0, 1)}</div>
       <div className="comment-body">
-        <div className="comment-meta"><Link to={`/users/${comment.author.username}`}>{comment.author.nickname}</Link><span>{formatDate(comment.createdAt)}</span></div>
+        <div className="comment-meta"><Link to={`/users/${comment.author.username}`}>{comment.author.nickname}</Link><span>{formatDate(comment.createdAt)}</span>{comment.pinned && <span className="comment-pinned"><Pin size={11} /> 置顶</span>}</div>
         <p>{comment.content}</p>
-        <div className="comment-actions"><button onClick={() => setReplyTo(comment)}>回复</button><button className={comment.liked ? 'is-liked' : ''} onClick={() => user ? void toggleCommentLike(comment) : undefined}><Heart size={13} fill={comment.liked ? 'currentColor' : 'none'} /> {comment.likesCount}</button>{user && user.id !== comment.author.id && <button onClick={() => void reportComment(comment)}><Flag size={13} /> 举报</button>}{user?.id === comment.author.id && <button onClick={() => void removeComment(comment)}><Trash2 size={13} /> 删除</button>}</div>
+        <div className="comment-actions"><button onClick={() => setReplyTo(comment)}>回复</button><button className={comment.liked ? 'is-liked' : ''} onClick={() => user ? void toggleCommentLike(comment) : undefined}><Heart size={13} fill={comment.liked ? 'currentColor' : 'none'} /> {comment.likesCount}</button>{!isReply && user && (user.id === post.author.id || user.role === 'admin') && <button onClick={() => void togglePinned(comment)}><Pin size={13} /> {comment.pinned ? '取消置顶' : '置顶'}</button>}{user && user.id !== comment.author.id && <button onClick={() => void reportComment(comment)}><Flag size={13} /> 举报</button>}{user?.id === comment.author.id && <button onClick={() => void removeComment(comment)}><Trash2 size={13} /> 删除</button>}</div>
       </div>
     </div>
   )
@@ -250,7 +269,7 @@ export function PostPage() {
         {previous ? <Link to={`/posts/${previous.slug}`} className="article-nav-item"><span><ArrowLeft size={15} /> 上一篇</span><strong>{previous.title}</strong></Link> : <span />}
         {next ? <Link to={`/posts/${next.slug}`} className="article-nav-item align-right"><span>下一篇 <ArrowRight size={15} /></span><strong>{next.title}</strong></Link> : <span />}
       </div>
-      <section className="container comments-section" id="comments"><div className="comments-heading"><div><div className="eyebrow">Discussion</div><h2>评论 {post.commentsCount}</h2></div>{!user && <Link className="text-button" to="/login">登录后参与 <ArrowRight size={15} /></Link>}</div>{user && <div className="comment-composer">{replyTo && <div className="replying">回复 @{replyTo.author.username} <button onClick={() => setReplyTo(undefined)}>取消</button></div>}<textarea value={commentInput} onChange={(event) => setCommentInput(event.target.value)} placeholder="写下你的看法" rows={4} /><button className="button button-dark" onClick={() => void submitComment()} disabled={commentSaving || !commentInput.trim()}><MessageCircle size={15} /> {commentSaving ? '发送中' : '发表评论'}</button></div>}<div className="comments-list">{commentTree.length ? commentTree.map((node) => <div className="comment-thread" key={node.comment.id}>{renderComment(node.comment, false)}{node.replies.length > 0 && <div className="comment-replies">{node.replies.map((reply) => renderComment(reply, true))}</div>}</div>) : <div className="empty-state comments-empty"><h2>还没有评论</h2><p>成为第一个留下观点的人。</p></div>}</div></section>
+      <section className="container comments-section" id="comments"><div className="comments-heading"><div><div className="eyebrow">Discussion</div><h2>评论 {post.commentsCount}</h2></div>{!user && <Link className="text-button" to="/login">登录后参与 <ArrowRight size={15} /></Link>}</div>{user && <div className="comment-composer">{replyTo && <div className="replying">回复 @{replyTo.author.username} <button onClick={() => setReplyTo(undefined)}>取消</button></div>}<textarea value={commentInput} onChange={(event) => setCommentInput(event.target.value)} placeholder="写下你的看法" rows={4} /><button className="button button-dark" onClick={() => void submitComment()} disabled={commentSaving || !commentInput.trim()}><MessageCircle size={15} /> {commentSaving ? '发送中' : '发表评论'}</button></div>}<div className="comments-list">{commentTree.length ? commentTree.map((node) => { const collapsed = collapsedThreads.has(node.comment.id); return <div className="comment-thread" key={node.comment.id}>{renderComment(node.comment, false)}{node.replies.length > 0 && <><button className="comment-collapse" onClick={() => toggleThread(node.comment.id)}>{collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />} {collapsed ? `展开 ${node.replies.length} 条回复` : `收起 ${node.replies.length} 条回复`}</button>{!collapsed && <div className="comment-replies">{node.replies.map((reply) => renderComment(reply, true))}</div>}</>}</div> }) : <div className="empty-state comments-empty"><h2>还没有评论</h2><p>成为第一个留下观点的人。</p></div>}</div></section>
       </article>
       <PromptDialog open={Boolean(reportRequest)} title={reportRequest?.title ?? ''} message="请输入举报理由，管理员审核后会处理。" value={reportReason} placeholder="例如：内容涉及广告、骚扰或违规信息" onChange={setReportReason} onSubmit={submitReport} onCancel={() => { setReportRequest(undefined); setReportReason('') }} />
       <ConfirmDialog open={Boolean(deleteRequest)} title="删除评论" message="确定删除这条评论吗？它下面的回复也会一并删除。" onCancel={() => setDeleteRequest(undefined)} onConfirm={confirmRemoveComment} />

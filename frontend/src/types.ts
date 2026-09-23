@@ -47,6 +47,7 @@ export type PostRevision = {
 export type UserSummary = {
   id: number
   username: string
+  email?: string
   nickname: string
   avatar: string
   bio: string
@@ -60,6 +61,7 @@ export type Comment = {
   parentId: number | null
   replyToUserId: number | null
   content: string
+  pinned: boolean
   likesCount: number
   liked: boolean
   createdAt: string
@@ -73,6 +75,7 @@ export type AdminComment = {
   postSlug: string
   content: string
   status: string
+  pinned: boolean
   createdAt: string
   author: UserSummary
 }
@@ -86,6 +89,8 @@ export type NotificationItem = {
   read: boolean
   createdAt: string
   actor: UserSummary
+  groupCount?: number
+  groupedIds?: number[]
 }
 
 export type AdminReport = {

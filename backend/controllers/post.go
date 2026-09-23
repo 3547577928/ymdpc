@@ -16,7 +16,10 @@ import (
 	"gorm.io/gorm"
 )
 
-type PostController struct{ DB *gorm.DB }
+type PostController struct {
+	DB        *gorm.DB
+	UploadDir string
+}
 
 // interactionSets 批量查询当前用户对一组文章的点赞与收藏状态。
 // 列表接口逐篇文章 COUNT 会产生 N+1 查询（一页 12 篇就多 12 次查询），
@@ -365,6 +368,12 @@ func (p *PostController) Delete(c *gin.Context) {
 	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "删除文章失败"})
 		return
+	}
+	if p.UploadDir != "" {
+		if _, err := cleanupUnreferencedUploads(p.UploadDir, p.DB); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "文章已删除，但图片清理失败"})
+			return
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
 }

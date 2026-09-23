@@ -20,7 +20,7 @@ export function ImageUploadField({ value, onChange, allowUrl = true, buttonLabel
     setError('')
     setUploading(true)
     try {
-      const result = await uploadImage(file)
+      const result = await uploadImage(file, { avatar })
       onChange(result.url)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '上传图片失败')

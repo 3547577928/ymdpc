@@ -34,6 +34,8 @@ go run ./cmd/server
 
 图片默认保存到 `./data/uploads`，可通过 `UPLOAD_DIR` 修改。部署时需要持久化该目录，避免容器重建后图片丢失。
 
+登录支持邮箱魔法链接。生产环境需要设置 `APP_BASE_URL`、`SMTP_USERNAME` 和 `SMTP_PASSWORD`；QQ 邮箱使用 `smtp.qq.com`，`SMTP_PASSWORD` 必须填写 QQ 邮箱设置中生成的 SMTP 授权码，不是 QQ 登录密码。魔法链接默认 15 分钟有效且只能使用一次。
+
 管理员后台保留文章编辑能力，并新增用户与社区统计：用户数、文章数、阅读量、点赞数、评论数、关注关系，以及每个用户的文章数、获赞数、粉丝数和关注数。
 
 本地开发时，Vite 会把 `/api` 代理到 `http://localhost:8080`。请同时运行前端和后端。

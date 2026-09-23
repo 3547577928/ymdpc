@@ -1,12 +1,13 @@
 import { Eye, PenLine, UploadCloud, X } from 'lucide-react'
 import type { Dispatch, FormEvent, SetStateAction } from 'react'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { PostInput } from '../../services/api'
 import type { PostStatus, TagUsage } from '../../types'
 import { ImageUploadField } from '../../components/ImageUploadField'
 import { MarkdownContent } from '../../components/MarkdownContent'
 import { MarkdownImportButton } from '../../components/MarkdownImportButton'
 import { CategoryField } from '../../components/CategoryField'
+import { MarkdownImageUploadButton } from '../../components/MarkdownImageUploadButton'
 
 type AdminPostEditorProps = {
   editingID?: number
@@ -24,6 +25,21 @@ type AdminPostEditorProps = {
 export function AdminPostEditor({ editingID, editorLoading, saving, error, draft, categories, setDraft, onClose, onSubmit, onSaveDraft }: AdminPostEditorProps) {
   const [mode, setMode] = useState<'write' | 'preview'>('write')
   const [importError, setImportError] = useState('')
+  const contentRef = useRef<HTMLTextAreaElement>(null)
+
+  const insertMarkdownImage = (markdown: string) => {
+    setDraft((current) => {
+      const textarea = contentRef.current
+      const start = textarea?.selectionStart ?? current.content.length
+      const end = textarea?.selectionEnd ?? start
+      const before = current.content.slice(0, start)
+      const after = current.content.slice(end)
+      const prefix = before && !before.endsWith('\n') ? '\n' : ''
+      const suffix = after && !after.startsWith('\n') ? '\n' : ''
+      return { ...current, content: `${before}${prefix}${markdown}${suffix}${after}` }
+    })
+    setMode('write')
+  }
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -50,9 +66,9 @@ export function AdminPostEditor({ editingID, editorLoading, saving, error, draft
           <label>封面图片<ImageUploadField value={draft.coverImage} onChange={(coverImage) => setDraft({ ...draft, coverImage })} /></label>
           <label>计划发布时间<input type="datetime-local" value={draft.scheduledAt ? new Date(new Date(draft.scheduledAt).getTime() - new Date(draft.scheduledAt).getTimezoneOffset() * 60_000).toISOString().slice(0, 16) : ''} onChange={(event) => setDraft({ ...draft, scheduledAt: event.target.value ? new Date(event.target.value).toISOString() : null })} /></label>
           <label className="checkbox-field"><input type="checkbox" checked={draft.featured} onChange={(event) => setDraft({ ...draft, featured: event.target.checked })} />设为精选文章</label>
-          <div className="editor-content-tools"><MarkdownImportButton disabled={saving} onImport={(document) => { setDraft((current) => ({ ...current, content: document.content, title: current.title.trim() ? current.title : document.title })); setMode('preview'); setImportError('') }} onError={setImportError} /><div className="editor-mode" role="tablist" aria-label="正文模式"><button type="button" className={mode === 'write' ? 'is-active' : ''} onClick={() => setMode('write')}><PenLine size={14} /> 编辑</button><button type="button" className={mode === 'preview' ? 'is-active' : ''} onClick={() => setMode('preview')}><Eye size={14} /> 预览</button></div></div>
+          <div className="editor-content-tools"><div className="editor-content-actions"><MarkdownImportButton disabled={saving} onImport={(document) => { setDraft((current) => ({ ...current, content: document.content, title: current.title.trim() ? current.title : document.title, summary: current.summary.trim() ? current.summary : document.summary })); setMode('preview'); setImportError('') }} onError={setImportError} /><MarkdownImageUploadButton disabled={saving} onInsert={insertMarkdownImage} onError={setImportError} /></div><div className="editor-mode" role="tablist" aria-label="正文模式"><button type="button" className={mode === 'write' ? 'is-active' : ''} onClick={() => setMode('write')}><PenLine size={14} /> 编辑</button><button type="button" className={mode === 'preview' ? 'is-active' : ''} onClick={() => setMode('preview')}><Eye size={14} /> 预览</button></div></div>
           {importError && <div className="form-error">{importError}</div>}
-          {mode === 'write' ? <label>正文<textarea required className="editor-textarea" value={draft.content} onChange={(event) => setDraft({ ...draft, content: event.target.value })} placeholder="支持 Markdown" /></label> : <div className="editor-preview"><MarkdownContent className="article-content" content={draft.content || '*这里会显示 Markdown 预览。*'} /></div>}
+          {mode === 'write' ? <label>正文<textarea ref={contentRef} required className="editor-textarea" value={draft.content} onChange={(event) => setDraft({ ...draft, content: event.target.value })} placeholder="支持 Markdown" /></label> : <div className="editor-preview"><MarkdownContent className="article-content" content={draft.content || '*这里会显示 Markdown 预览。*'} /></div>}
           <div className="editor-actions">
             {!editingID && <button type="button" className="button button-light" onClick={onSaveDraft} disabled={saving}>保存草稿</button>}
             <button type="submit" className="button button-dark" disabled={saving}><UploadCloud size={16} /> {saving ? '保存中' : editingID ? '保存修改' : '发布文章'}</button>

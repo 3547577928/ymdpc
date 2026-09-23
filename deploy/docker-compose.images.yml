@@ -12,6 +12,13 @@ services:
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost}
+      SMTP_HOST: ${SMTP_HOST:-smtp.qq.com}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_USERNAME: ${SMTP_USERNAME:-3547577928@qq.com}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-3547577928@qq.com}
+      MAGIC_LINK_TTL: ${MAGIC_LINK_TTL:-15m}
     volumes:
       - sqlite_data:/data
 

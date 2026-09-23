@@ -18,6 +18,15 @@ type AuthController struct {
 	DB           *gorm.DB
 	Secret       string
 	CookieSecure bool
+	AppBaseURL   string
+	SMTPHost     string
+	SMTPPort     int
+	SMTPUsername string
+	SMTPPassword string
+	SMTPFrom     string
+	MagicLinkTTL time.Duration
+	// SendMagicLink 可由测试注入，生产环境为空时使用 QQ SMTP。
+	SendMagicLink func(to, link string) error
 }
 
 type AuthUserDTO struct {
@@ -26,6 +35,7 @@ type AuthUserDTO struct {
 	Nickname string `json:"nickname"`
 	Avatar   string `json:"avatar"`
 	Bio      string `json:"bio"`
+	Email    string `json:"email"`
 	Role     string `json:"role"`
 	Status   string `json:"status"`
 }
@@ -40,6 +50,7 @@ func (a *AuthController) Register(c *gin.Context) {
 		Username string `json:"username" binding:"required"`
 		Password string `json:"password" binding:"required"`
 		Nickname string `json:"nickname"`
+		Email    string `json:"email"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "用户名和密码不能为空"})
@@ -47,6 +58,7 @@ func (a *AuthController) Register(c *gin.Context) {
 	}
 	input.Username = strings.TrimSpace(input.Username)
 	input.Nickname = strings.TrimSpace(input.Nickname)
+	input.Email = normalizeEmail(input.Email)
 	if len(input.Username) < 3 || len(input.Username) > 60 {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "用户名长度需要在 3 到 60 个字符之间"})
 		return
@@ -57,6 +69,16 @@ func (a *AuthController) Register(c *gin.Context) {
 	}
 	if input.Nickname == "" {
 		input.Nickname = input.Username
+	}
+	if input.Email != "" {
+		if err := validateEmail(input.Email); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+			return
+		}
+		if emailTaken(a.DB, input.Email, 0) {
+			c.JSON(http.StatusConflict, gin.H{"code": 409, "message": "邮箱已绑定其他账号"})
+			return
+		}
 	}
 	var count int64
 	if err := a.DB.Model(&models.User{}).Where("username = ?", input.Username).Count(&count).Error; err != nil {
@@ -74,7 +96,7 @@ func (a *AuthController) Register(c *gin.Context) {
 	}
 	// SessionVersion 显式置 1（与列默认值一致）：Create 后 GORM 不一定把默认值回填到
 	// 结构体，签发 session 时用字面量值才是最可靠的
-	user := models.User{Username: input.Username, PasswordHash: string(hash), Nickname: input.Nickname, Role: "user", Status: "active", SessionVersion: 1}
+	user := models.User{Username: input.Username, Email: input.Email, PasswordHash: string(hash), Nickname: input.Nickname, Role: "user", Status: "active", SessionVersion: 1}
 	if err := a.DB.Create(&user).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "注册失败"})
 		return
@@ -175,12 +197,24 @@ func (a *AuthController) UpdateProfile(c *gin.Context) {
 		Nickname string `json:"nickname"`
 		Avatar   string `json:"avatar"`
 		Bio      string `json:"bio"`
+		Email    string `json:"email"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "资料格式错误"})
 		return
 	}
-	updates := map[string]any{"nickname": strings.TrimSpace(input.Nickname), "avatar": strings.TrimSpace(input.Avatar), "bio": strings.TrimSpace(input.Bio)}
+	input.Email = normalizeEmail(input.Email)
+	if input.Email != "" {
+		if err := validateEmail(input.Email); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+			return
+		}
+		if emailTaken(a.DB, input.Email, userID) {
+			c.JSON(http.StatusConflict, gin.H{"code": 409, "message": "邮箱已绑定其他账号"})
+			return
+		}
+	}
+	updates := map[string]any{"nickname": strings.TrimSpace(input.Nickname), "avatar": strings.TrimSpace(input.Avatar), "bio": strings.TrimSpace(input.Bio), "email": input.Email}
 	if updates["nickname"] == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "昵称不能为空"})
 		return
@@ -236,5 +270,5 @@ func (a *AuthController) UpdatePassword(c *gin.Context) {
 }
 
 func toAuthUserDTO(user models.User) AuthUserDTO {
-	return AuthUserDTO{ID: user.ID, Username: user.Username, Nickname: user.Nickname, Avatar: user.Avatar, Bio: user.Bio, Role: user.Role, Status: user.Status}
+	return AuthUserDTO{ID: user.ID, Username: user.Username, Nickname: user.Nickname, Avatar: user.Avatar, Bio: user.Bio, Email: user.Email, Role: user.Role, Status: user.Status}
 }

@@ -1,9 +1,12 @@
 package controllers
 
 import (
+	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -11,6 +14,67 @@ import (
 	"gorm.io/gorm"
 	"quietsignal/backend/models"
 )
+
+func TestMagicLinkCreatesUserAndIsSingleUse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newCommunityTestDB(t)
+	var sentLink string
+	auth := &AuthController{
+		DB:           db,
+		Secret:       "test-secret",
+		AppBaseURL:   "http://localhost:5173",
+		MagicLinkTTL: time.Minute,
+		SendMagicLink: func(to, link string) error {
+			if to != "writer@example.com" {
+				t.Fatalf("unexpected recipient: %s", to)
+			}
+			sentLink = link
+			return nil
+		},
+	}
+
+	request := performRequest(auth.RequestMagicLink, http.MethodPost, "/api/auth/magic-link/request", `{"email":"Writer@Example.com"}`, nil)
+	if request.Code != http.StatusOK {
+		t.Fatalf("request magic link returned %d: %s", request.Code, request.Body.String())
+	}
+	parsed, err := url.Parse(sentLink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := parsed.Query().Get("token")
+	if token == "" {
+		t.Fatalf("magic link did not contain token: %s", sentLink)
+	}
+
+	verify := performRequest(auth.VerifyMagicLink, http.MethodPost, "/api/auth/magic-link/verify", mustJSON(t, map[string]string{"token": token}), nil)
+	if verify.Code != http.StatusOK {
+		t.Fatalf("verify magic link returned %d: %s", verify.Code, verify.Body.String())
+	}
+	var user models.User
+	if err := db.Where("email = ?", "writer@example.com").First(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	if user.Username != "writer" {
+		t.Fatalf("expected generated username writer, got %q", user.Username)
+	}
+	if len(verify.Result().Cookies()) == 0 || verify.Result().Cookies()[0].Name != "qs_token" {
+		t.Fatal("magic link login did not issue session cookie")
+	}
+
+	secondVerify := performRequest(auth.VerifyMagicLink, http.MethodPost, "/api/auth/magic-link/verify", mustJSON(t, map[string]string{"token": token}), nil)
+	if secondVerify.Code != http.StatusUnauthorized {
+		t.Fatalf("reused magic link returned %d: %s", secondVerify.Code, secondVerify.Body.String())
+	}
+}
+
+func mustJSON(t *testing.T, value any) string {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(encoded)
+}
 
 // TestUpdatePassword 验证修改密码：原密码校验、长度校验与密码更新
 func TestUpdatePassword(t *testing.T) {

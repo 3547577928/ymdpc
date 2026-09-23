@@ -1,7 +1,7 @@
-import { ArrowLeft, Bell, Heart, MessageCircle, Newspaper, Reply, UserPlus } from 'lucide-react'
+import { ArrowLeft, Bell, CheckCheck, Heart, MessageCircle, Newspaper, Reply, UserPlus } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { getNotifications, markNotificationRead } from '../services/api'
+import { getNotifications, markAllNotificationsRead, markNotificationRead } from '../services/api'
 import type { NotificationItem } from '../types'
 import { formatDate } from '../utils'
 
@@ -11,6 +11,25 @@ const typeMeta: Record<NotificationItem['type'], { icon: typeof Bell; text: (ite
   like: { icon: Heart, text: (item) => `赞了你的文章《${item.resourceTitle ?? ''}》` },
   follow: { icon: UserPlus, text: () => '关注了你' },
   post: { icon: Newspaper, text: (item) => `发布了新文章《${item.resourceTitle ?? ''}》` },
+}
+
+function groupNotificationItems(items: NotificationItem[]) {
+  const groups: NotificationItem[] = []
+  const byKey = new Map<string, NotificationItem>()
+  for (const item of items) {
+    const key = `${item.type}:${item.resourceId}:${item.actor.id}`
+    const existing = byKey.get(key)
+    if (!existing) {
+      const group = { ...item, groupCount: 1, groupedIds: [item.id] }
+      byKey.set(key, group)
+      groups.push(group)
+    } else {
+      existing.groupCount = (existing.groupCount ?? 1) + 1
+      existing.groupedIds = [...(existing.groupedIds ?? [existing.id]), item.id]
+      existing.read = existing.read && item.read
+    }
+  }
+  return groups
 }
 
 // 通知中心：展示评论、回复、点赞、关注四类通知，点击跳转并标记已读
@@ -28,7 +47,7 @@ export function NotificationsPage() {
     setLoading(true)
     try {
       const data = await getNotifications({ page, pageSize })
-      setItems(data.items)
+      setItems(groupNotificationItems(data.items))
       setUnread(data.unread)
       setTotal(data.total)
     } catch (reason) {
@@ -38,6 +57,16 @@ export function NotificationsPage() {
     }
   }, [page])
 
+  const markAllRead = async () => {
+    try {
+      await markAllNotificationsRead()
+      setItems((current) => current.map((item) => ({ ...item, read: true })))
+      setUnread(0)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '更新通知失败')
+    }
+  }
+
   useEffect(() => {
     void load()
   }, [load])
@@ -45,7 +74,7 @@ export function NotificationsPage() {
   // 点击通知：标记已读并跳转到对应内容
   const open = async (item: NotificationItem) => {
     if (!item.read) {
-      await markNotificationRead(item.id).catch(() => undefined)
+      await Promise.all((item.groupedIds ?? [item.id]).map((id) => markNotificationRead(id).catch(() => undefined)))
     }
     if (item.type === 'follow') navigate(`/users/${item.actor.username}`)
     else if (item.resourceSlug) navigate(`/posts/${item.resourceSlug}${item.type === 'post' ? '' : '#comments'}`)
@@ -56,7 +85,7 @@ export function NotificationsPage() {
 
   return <section className="container my-posts-page">
     <div className="write-topbar"><Link className="back-link" to="/"><ArrowLeft size={15} /> 返回社区</Link><span className="eyebrow">Notifications</span></div>
-    <h1>通知中心 {unread > 0 && <small className="unread-badge">{unread} 条未读</small>}</h1>
+    <div className="notifications-heading"><h1>通知中心 {unread > 0 && <small className="unread-badge">{unread} 条未读</small>}</h1>{unread > 0 && <button className="text-button" onClick={() => void markAllRead()}><CheckCheck size={15} /> 全部已读</button>}</div>
     {error && <div className="form-error">{error}</div>}
     {loading ? <div className="page-state"><h1>正在读取。</h1></div> : items.length ? <div className="notifications-list">
       {items.map((item) => {
@@ -66,7 +95,7 @@ export function NotificationsPage() {
           <button className={`notification-item ${item.read ? '' : 'is-unread'}`} key={item.id} onClick={() => void open(item)}>
             <span className="notification-icon"><Icon size={16} /></span>
             <span className="notification-body">
-              <strong>{item.actor.nickname}</strong> {meta.text(item)}
+              <strong>{item.actor.nickname}</strong> {meta.text(item)}{(item.groupCount ?? 1) > 1 && <span> 等 {item.groupCount} 次</span>}
               <small>{formatDate(item.createdAt)}</small>
             </span>
             {!item.read && <span className="notification-dot" aria-label="未读" />}

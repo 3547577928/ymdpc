@@ -39,6 +39,7 @@ type Tag struct {
 type User struct {
 	ID           uint   `json:"id" gorm:"primaryKey"`
 	Username     string `json:"username" gorm:"size:60;uniqueIndex;not null"`
+	Email        string `json:"email" gorm:"size:254;index"`
 	PasswordHash string `json:"-" gorm:"size:255;not null"`
 	Nickname     string `json:"nickname" gorm:"size:100"`
 	Avatar       string `json:"avatar" gorm:"size:500"`
@@ -62,6 +63,7 @@ type Comment struct {
 	ReplyToUserID *uint     `json:"replyToUserId"`
 	Content       string    `json:"content" gorm:"type:text;not null"`
 	Status        string    `json:"status" gorm:"size:20;index;not null;default:published"`
+	Pinned        bool      `json:"pinned" gorm:"index"`
 	LikesCount    int       `json:"likesCount"`
 	CreatedAt     time.Time `json:"createdAt"`
 	UpdatedAt     time.Time `json:"updatedAt"`

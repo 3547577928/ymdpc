@@ -1,11 +1,12 @@
 import { ArrowLeft, CalendarClock, Eye, FileClock, History, PenLine, RotateCcw, Save, Send } from 'lucide-react'
 import type { FormEvent } from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { MarkdownContent } from '../components/MarkdownContent'
 import { ImageUploadField } from '../components/ImageUploadField'
 import { MarkdownImportButton } from '../components/MarkdownImportButton'
 import { CategoryField } from '../components/CategoryField'
+import { MarkdownImageUploadButton } from '../components/MarkdownImageUploadButton'
 import { ConfirmDialog } from '../components/Dialog'
 import { createUserPost, getCategories, getCurrentUser, getPostById, getPostRevisions, restorePostRevision, updateUserPost, type PostInput } from '../services/api'
 import type { Category, Post, PostRevision } from '../types'
@@ -37,6 +38,7 @@ export function WritePage() {
   const [recovery, setRecovery] = useState<StoredPostDraft>()
   const [revisions, setRevisions] = useState<PostRevision[]>([])
   const [revisionToRestore, setRevisionToRestore] = useState<PostRevision>()
+  const contentRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
     getCategories().then(setCategories).catch(() => undefined)
@@ -124,11 +126,25 @@ export function WritePage() {
     setDraft({ title: post.title, slug: post.slug, summary: post.summary, content: post.content, coverImage: post.coverImage, tags: post.tags, status: post.status, featured: post.featured, categoryId: post.category?.id ?? null, scheduledAt: post.scheduledAt ?? null })
   }
 
-  const importMarkdown = (document: { content: string; title: string }) => {
-    setDraft((current) => ({ ...current, content: document.content, title: current.title.trim() ? current.title : document.title }))
+  const importMarkdown = (document: { content: string; title: string; summary: string }) => {
+    setDraft((current) => ({ ...current, content: document.content, title: current.title.trim() ? current.title : document.title, summary: current.summary.trim() ? current.summary : document.summary }))
     setMode('preview')
     setAutosaveText('已导入 Markdown')
     setError('')
+  }
+
+  const insertMarkdownImage = (markdown: string) => {
+    setDraft((current) => {
+      const textarea = contentRef.current
+      const start = textarea?.selectionStart ?? current.content.length
+      const end = textarea?.selectionEnd ?? start
+      const before = current.content.slice(0, start)
+      const after = current.content.slice(end)
+      const prefix = before && !before.endsWith('\n') ? '\n' : ''
+      const suffix = after && !after.startsWith('\n') ? '\n' : ''
+      return { ...current, content: `${before}${prefix}${markdown}${suffix}${after}` }
+    })
+    setMode('write')
   }
 
   const restoreRevision = async () => {
@@ -163,7 +179,7 @@ export function WritePage() {
         <input className="write-title" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="写下标题" required />
         <textarea className="write-summary" value={draft.summary} onChange={(event) => setDraft({ ...draft, summary: event.target.value })} placeholder="用一句话说明这篇文章" />
         {mode === 'write'
-          ? <textarea className="write-content" value={draft.content} onChange={(event) => setDraft({ ...draft, content: event.target.value })} placeholder="支持 Markdown，写下你的想法。" required />
+          ? <><div className="editor-content-tools write-content-tools"><MarkdownImageUploadButton onInsert={insertMarkdownImage} onError={setError} /><span>图片会插入当前光标位置</span></div><textarea ref={contentRef} className="write-content" value={draft.content} onChange={(event) => setDraft({ ...draft, content: event.target.value })} placeholder="支持 Markdown，写下你的想法。" required /></>
           : <div className="write-preview"><MarkdownContent className="article-content" content={draft.content || '*这里会显示 Markdown 预览。*'} /></div>}
       </main>
       <aside className="write-sidebar">

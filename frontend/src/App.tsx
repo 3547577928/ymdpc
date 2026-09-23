@@ -3,6 +3,7 @@ import { Shell } from './components/Shell'
 import { AboutPage } from './pages/AboutPage'
 import { AdminPage } from './pages/AdminPage'
 import { AuthPage } from './pages/AuthPage'
+import { MagicLinkPage } from './pages/MagicLinkPage'
 import { FavoritesPage } from './pages/FavoritesPage'
 import { HomePage } from './pages/HomePage'
 import { MyPostsPage } from './pages/MyPostsPage'
@@ -48,6 +49,7 @@ export default function App() {
         />
         <Route path="/login" element={<AuthPage />} />
         <Route path="/register" element={<AuthPage />} />
+        <Route path="/auth/magic-link" element={<MagicLinkPage />} />
         <Route path="/admin" element={<AdminPage />} />
       </Routes>
     </BrowserRouter>

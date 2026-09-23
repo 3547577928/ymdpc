@@ -402,6 +402,16 @@ func (ic *InteractionController) MarkNotificationRead(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
 }
 
+// MarkAllNotificationsRead 一次性标记当前用户的全部未读通知。
+func (ic *InteractionController) MarkAllNotificationsRead(c *gin.Context) {
+	userID := currentUserID(c)
+	if err := ic.DB.Model(&models.Notification{}).Where("user_id = ? AND read_at IS NULL", userID).Update("read_at", time.Now()).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新通知失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
+}
+
 // CreateReport 举报文章或评论
 func (ic *InteractionController) CreateReport(c *gin.Context) {
 	userID := currentUserID(c)
@@ -523,6 +533,42 @@ func (ic *InteractionController) AdminHandleReport(c *gin.Context) {
 		return writeAdminLog(tx, adminID, "report."+input.Status, report.TargetType, report.TargetID, report.Reason)
 	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "处理举报失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
+}
+
+// AdminHandleReportsBatch 批量处理举报。
+func (ic *InteractionController) AdminHandleReportsBatch(c *gin.Context) {
+	adminID := currentUserID(c)
+	var input struct {
+		IDs    []uint `json:"ids"`
+		Status string `json:"status"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil || len(input.IDs) == 0 || (input.Status != "handled" && input.Status != "dismissed") {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "批量举报参数无效"})
+		return
+	}
+	if len(input.IDs) > 100 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "一次最多处理 100 条举报"})
+		return
+	}
+	if err := ic.DB.Transaction(func(tx *gorm.DB) error {
+		var reports []models.Report
+		if err := tx.Where("id IN ?", input.IDs).Find(&reports).Error; err != nil {
+			return err
+		}
+		for _, report := range reports {
+			if err := tx.Model(&report).Updates(map[string]any{"status": input.Status, "handled_by": adminID}).Error; err != nil {
+				return err
+			}
+			if err := writeAdminLog(tx, adminID, "report."+input.Status, report.TargetType, report.TargetID, report.Reason); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "批量处理举报失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})

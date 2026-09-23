@@ -26,7 +26,10 @@ type UserDTO struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
-type CommunityController struct{ DB *gorm.DB }
+type CommunityController struct {
+	DB        *gorm.DB
+	UploadDir string
+}
 
 func currentUserID(c *gin.Context) uint {
 	value, ok := c.Get("userID")
@@ -265,6 +268,12 @@ func (cc *CommunityController) DeletePost(c *gin.Context) {
 	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "删除文章失败"})
 		return
+	}
+	if cc.UploadDir != "" {
+		if _, err := cleanupUnreferencedUploads(cc.UploadDir, cc.DB); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "文章已删除，但图片清理失败"})
+			return
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
 }

@@ -22,6 +22,7 @@ type CommentDTO struct {
 	ParentID      *uint     `json:"parentId"`
 	ReplyToUserID *uint     `json:"replyToUserId"`
 	Content       string    `json:"content"`
+	Pinned        bool      `json:"pinned"`
 	LikesCount    int       `json:"likesCount"`
 	Liked         bool      `json:"liked"`
 	CreatedAt     time.Time `json:"createdAt"`
@@ -29,7 +30,7 @@ type CommentDTO struct {
 }
 
 func toCommentDTO(comment models.Comment, liked bool) CommentDTO {
-	return CommentDTO{ID: comment.ID, PostID: comment.PostID, ParentID: comment.ParentID, ReplyToUserID: comment.ReplyToUserID, Content: comment.Content, LikesCount: comment.LikesCount, Liked: liked, CreatedAt: comment.CreatedAt, Author: toUserDTO(comment.Author)}
+	return CommentDTO{ID: comment.ID, PostID: comment.PostID, ParentID: comment.ParentID, ReplyToUserID: comment.ReplyToUserID, Content: comment.Content, Pinned: comment.Pinned, LikesCount: comment.LikesCount, Liked: liked, CreatedAt: comment.CreatedAt, Author: toUserDTO(comment.Author)}
 }
 
 // ListComments 文章的公开评论列表，按时间正序返回
@@ -40,7 +41,7 @@ func (cc *CommunityController) ListComments(c *gin.Context) {
 		return
 	}
 	var comments []models.Comment
-	if err := cc.DB.Where("post_id = ? AND status = ?", post.ID, "published").Preload("Author").Order("created_at ASC, id ASC").Find(&comments).Error; err != nil {
+	if err := cc.DB.Where("post_id = ? AND status = ?", post.ID, "published").Preload("Author").Order("pinned DESC, created_at ASC, id ASC").Find(&comments).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取评论失败"})
 		return
 	}
@@ -184,6 +185,7 @@ type AdminCommentDTO struct {
 	PostSlug  string    `json:"postSlug"`
 	Content   string    `json:"content"`
 	Status    string    `json:"status"`
+	Pinned    bool      `json:"pinned"`
 	CreatedAt time.Time `json:"createdAt"`
 	Author    UserDTO   `json:"author"`
 }
@@ -211,7 +213,7 @@ func (cc *CommunityController) AdminComments(c *gin.Context) {
 	}
 	items := make([]AdminCommentDTO, 0, len(comments))
 	for _, comment := range comments {
-		items = append(items, AdminCommentDTO{ID: comment.ID, PostID: comment.PostID, PostTitle: comment.Post.Title, PostSlug: comment.Post.Slug, Content: comment.Content, Status: comment.Status, CreatedAt: comment.CreatedAt, Author: toUserDTO(comment.Author)})
+		items = append(items, AdminCommentDTO{ID: comment.ID, PostID: comment.PostID, PostTitle: comment.Post.Title, PostSlug: comment.Post.Slug, Content: comment.Content, Status: comment.Status, Pinned: comment.Pinned, CreatedAt: comment.CreatedAt, Author: toUserDTO(comment.Author)})
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"items": items, "total": total, "page": page, "pageSize": pageSize}})
 }
@@ -245,6 +247,74 @@ func (cc *CommunityController) AdminUpdateCommentStatus(c *gin.Context) {
 		return refreshPostCommentCount(tx, comment.PostID)
 	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新评论状态失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
+}
+
+// PinComment 文章作者或管理员置顶/取消置顶评论。
+func (cc *CommunityController) PinComment(c *gin.Context) {
+	var input struct {
+		Pinned *bool `json:"pinned"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil || input.Pinned == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "置顶状态无效"})
+		return
+	}
+	var comment models.Comment
+	if err := cc.DB.Preload("Post").First(&comment, c.Param("id")).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "评论不存在"})
+		return
+	}
+	if comment.Post.AuthorID != currentUserID(c) && !currentUserIsAdmin(c) {
+		c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "只有文章作者或管理员可以置顶评论"})
+		return
+	}
+	if err := cc.DB.Model(&models.Comment{}).Where("id = ?", comment.ID).Update("pinned", *input.Pinned).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新置顶状态失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"pinned": *input.Pinned}})
+}
+
+// AdminBatchUpdateCommentStatus 批量隐藏/恢复评论，并同步受影响文章的计数。
+func (cc *CommunityController) AdminBatchUpdateCommentStatus(c *gin.Context) {
+	var input struct {
+		IDs    []uint `json:"ids"`
+		Status string `json:"status"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil || len(input.IDs) == 0 || (input.Status != "published" && input.Status != "hidden") {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "批量评论参数无效"})
+		return
+	}
+	if len(input.IDs) > 100 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "一次最多处理 100 条评论"})
+		return
+	}
+	if err := cc.DB.Transaction(func(tx *gorm.DB) error {
+		var comments []models.Comment
+		if err := tx.Where("id IN ?", input.IDs).Find(&comments).Error; err != nil {
+			return err
+		}
+		postIDs := map[uint]bool{}
+		for _, comment := range comments {
+			ids, err := commentDescendantIDs(tx, comment.ID)
+			if err != nil {
+				return err
+			}
+			if err := tx.Model(&models.Comment{}).Where("id IN ?", ids).Update("status", input.Status).Error; err != nil {
+				return err
+			}
+			postIDs[comment.PostID] = true
+		}
+		for postID := range postIDs {
+			if err := refreshPostCommentCount(tx, postID); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "批量更新评论失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})

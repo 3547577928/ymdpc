@@ -1,4 +1,5 @@
 import type { AdminComment, AdminLogEntry, AdminReport, Category, Comment, NotificationItem, Post, PostRevision, PostStatus, PostSummary, TagUsage, UserSummary } from '../types'
+import { prepareImageForUpload } from '../utils/imageUpload'
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '/api'
 
@@ -83,6 +84,14 @@ export function login(username: string, password: string) {
   return request<AuthUser>('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }), suppressAuthExpired: true })
 }
 
+export function requestMagicLink(email: string) {
+  return request<void>('/auth/magic-link/request', { method: 'POST', body: JSON.stringify({ email }), suppressAuthExpired: true })
+}
+
+export function verifyMagicLink(token: string) {
+  return request<AuthUser>('/auth/magic-link/verify', { method: 'POST', body: JSON.stringify({ token }), suppressAuthExpired: true })
+}
+
 export function register(username: string, password: string, nickname: string) {
   return request<AuthUser>('/auth/register', { method: 'POST', body: JSON.stringify({ username, password, nickname }), suppressAuthExpired: true })
 }
@@ -95,7 +104,7 @@ export function getCurrentUser() {
   return request<AuthUser>('/auth/me', { suppressAuthExpired: true })
 }
 
-export function updateProfile(input: { nickname: string; avatar: string; bio: string }) {
+export function updateProfile(input: { nickname: string; avatar: string; bio: string; email: string }) {
   return request<AuthUser>('/me/profile', { method: 'PATCH', body: JSON.stringify(input) })
 }
 
@@ -175,6 +184,14 @@ export function markNotificationRead(id: number) {
   return request<void>(`/notifications/${id}/read`, { method: 'PATCH' })
 }
 
+export function markAllNotificationsRead() {
+  return request<void>('/notifications/read-all', { method: 'POST' })
+}
+
+export function pinComment(id: number, pinned: boolean) {
+  return request<{ pinned: boolean }>(`/comments/${id}/pin`, { method: 'PATCH', body: JSON.stringify({ pinned }) })
+}
+
 export function getMyPosts(params: { status?: string; q?: string; page?: number; pageSize?: number } = {}) {
   const query = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => { if (value) query.set(key, String(value)) })
@@ -203,9 +220,9 @@ export function getCategories() {
   return request<Category[]>('/categories')
 }
 
-export async function uploadImage(file: File) {
+export async function uploadImage(file: File, options: { avatar?: boolean } = {}) {
   const body = new FormData()
-  body.append('file', file)
+  body.append('file', await prepareImageForUpload(file, options.avatar ? 800 : 2400))
   return request<{ url: string }>('/uploads/images', { method: 'POST', body })
 }
 
@@ -265,6 +282,10 @@ export function updateAdminCommentStatus(id: number, status: 'published' | 'hidd
   return request<void>(`/admin/comments/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) })
 }
 
+export function updateAdminCommentsStatus(ids: number[], status: 'published' | 'hidden') {
+  return request<void>('/admin/comments/batch', { method: 'POST', body: JSON.stringify({ ids, status }) })
+}
+
 export function getAdminReports(params: { page?: number; pageSize?: number; status?: string } = {}) {
   const query = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => { if (value) query.set(key, String(value)) })
@@ -273,6 +294,10 @@ export function getAdminReports(params: { page?: number; pageSize?: number; stat
 
 export function handleAdminReport(id: number, status: 'handled' | 'dismissed') {
   return request<void>(`/admin/reports/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) })
+}
+
+export function handleAdminReports(ids: number[], status: 'handled' | 'dismissed') {
+  return request<void>('/admin/reports/batch', { method: 'POST', body: JSON.stringify({ ids, status }) })
 }
 
 export function getAdminLogs(params: { page?: number; pageSize?: number } = {}) {

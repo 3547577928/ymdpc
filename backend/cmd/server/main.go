@@ -49,7 +49,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("connect database: %v", err)
 	}
-	if err := migrateDB.AutoMigrate(&models.User{}, &models.Post{}, &models.Tag{}, &models.Comment{}, &models.PostLike{}, &models.Follow{}, &models.Category{}, &models.Favorite{}, &models.CommentLike{}, &models.Notification{}, &models.Report{}, &models.AdminLog{}, &models.Setting{}, &models.PostRevision{}); err != nil {
+	if err := migrateDB.AutoMigrate(&models.User{}, &models.MagicLinkToken{}, &models.Post{}, &models.Tag{}, &models.Comment{}, &models.PostLike{}, &models.Follow{}, &models.Category{}, &models.Favorite{}, &models.CommentLike{}, &models.Notification{}, &models.Report{}, &models.AdminLog{}, &models.Setting{}, &models.PostRevision{}); err != nil {
 		log.Fatalf("migrate database: %v", err)
 	}
 	if err := models.EnsureIndexes(migrateDB); err != nil {
@@ -77,7 +77,7 @@ func main() {
 	r := gin.New()
 	r.Static("/uploads", cfg.UploadDir)
 	r.Use(gin.Logger(), gin.Recovery(), cors.New(corsConfig(cfg.AllowedOrigins, gin.Mode() != gin.ReleaseMode)))
-	routes.Register(r, routes.Dependencies{Posts: &controllers.PostController{DB: db}, Community: &controllers.CommunityController{DB: db}, Interactions: &controllers.InteractionController{DB: db}, Tags: &controllers.TagController{DB: db}, Auth: &controllers.AuthController{DB: db, Secret: cfg.JWTSecret, CookieSecure: cfg.CookieSecure}, Uploads: &controllers.UploadController{Dir: cfg.UploadDir}, Secret: cfg.JWTSecret, DB: db})
+	routes.Register(r, routes.Dependencies{Posts: &controllers.PostController{DB: db, UploadDir: cfg.UploadDir}, Community: &controllers.CommunityController{DB: db, UploadDir: cfg.UploadDir}, Interactions: &controllers.InteractionController{DB: db}, Tags: &controllers.TagController{DB: db}, Auth: &controllers.AuthController{DB: db, Secret: cfg.JWTSecret, CookieSecure: cfg.CookieSecure, AppBaseURL: cfg.AppBaseURL, SMTPHost: cfg.SMTPHost, SMTPPort: cfg.SMTPPort, SMTPUsername: cfg.SMTPUsername, SMTPPassword: cfg.SMTPPassword, SMTPFrom: cfg.SMTPFrom, MagicLinkTTL: cfg.MagicLinkTTL}, Uploads: &controllers.UploadController{Dir: cfg.UploadDir, DB: db}, Secret: cfg.JWTSecret, DB: db})
 
 	log.Printf("quiet signal api listening on :%s", cfg.Port)
 	server := &http.Server{

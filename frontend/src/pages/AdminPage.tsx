@@ -1,7 +1,7 @@
 import { Plus } from 'lucide-react'
 import type { FormEvent } from 'react'
 import { useEffect, useState } from 'react'
-import { createCategory, createPost, deleteCategory, deleteComment, deletePost, deleteTag, getAdminPost, getCurrentUser, handleAdminReport, login, logout, updateAdminCommentStatus, updateAdminSettings, updateAdminUser, updatePost, updatePostModeration, updatePostStatus, type AuthUser, type PostInput } from '../services/api'
+import { createCategory, createPost, deleteCategory, deleteComment, deletePost, deleteTag, getAdminPost, getCurrentUser, handleAdminReport, handleAdminReports, login, logout, updateAdminCommentStatus, updateAdminCommentsStatus, updateAdminSettings, updateAdminUser, updatePost, updatePostModeration, updatePostStatus, type AuthUser, type PostInput } from '../services/api'
 import type { AdminComment, AdminReport, PostStatus, PostSummary, TagUsage } from '../types'
 import { ConfirmDialog } from '../components/Dialog'
 import { AdminContent } from './admin/AdminContent'
@@ -137,6 +137,15 @@ export function AdminPage() {
     }
   }
 
+  const handleCommentsBatch = async (ids: number[], status: 'published' | 'hidden') => {
+    try {
+      await updateAdminCommentsStatus(ids, status)
+      await data.loadComments()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '批量更新评论失败')
+    }
+  }
+
   const handleRemoveComment = (comment: AdminComment) => {
     setConfirmRequest({ title: '删除评论', message: '确定删除这条评论吗？', action: async () => {
       try {
@@ -191,6 +200,15 @@ export function AdminPage() {
     }
   }
 
+  const handleReportsBatch = async (ids: number[], status: 'handled' | 'dismissed') => {
+    try {
+      await handleAdminReports(ids, status)
+      await data.loadReports()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '批量处理举报失败')
+    }
+  }
+
   const handleSaveSettings = async () => {
     try {
       data.setSettings(await updateAdminSettings(data.settings))
@@ -207,7 +225,7 @@ export function AdminPage() {
     <div className="admin-main">
       <header className="admin-topbar"><div><div className="eyebrow">Admin / {active}</div><h1>{active}</h1></div>{active === '文章' && <button className="button button-dark" onClick={openCreate}><Plus size={16} /> 写新文章</button>}</header>
       {error && <div className="form-error admin-error">{error}</div>}
-      <AdminContent active={active} stats={data.stats} posts={data.posts} listLoading={data.listLoading} page={page} totalPages={Math.max(1, Math.ceil(data.stats.total / pageSize))} onPageChange={setPage} onEditPost={(post) => void openEdit(post)} onPublishPost={(post) => void handlePublish(post)} onModeratePost={(post) => void handleModeration(post)} onDeletePost={handleDelete} users={data.users} userTotal={data.userTotal} userPage={userPage} userLoading={data.userLoading} onUserPageChange={setUserPage} onToggleUser={(member) => void updateAdminUser(member.id, { status: member.status === 'active' ? 'muted' : 'active' }).then(data.loadUsers).catch((reason: Error) => setError(reason.message))} comments={data.comments} commentTotal={data.commentTotal} commentPage={commentPage} commentLoading={data.commentLoading} commentPostFilter={commentPostFilter} setCommentPostFilter={setCommentPostFilter} onCommentPageChange={setCommentPage} onCommentStatus={(comment) => void handleCommentStatus(comment)} onDeleteComment={handleRemoveComment} tagData={data.tagData} newCategory={data.newCategory} setNewCategory={data.setNewCategory} onCreateCategory={() => void handleCreateCategory()} onDeleteCategory={handleDeleteCategory} onDeleteTag={handleDeleteTag} reports={data.reports} reportStatus={reportStatus} reportTotal={data.reportTotal} reportPage={reportPage} reportLoading={data.reportLoading} onReportStatusChange={(status) => { setReportStatus(status); setReportPage(1) }} onReportPageChange={setReportPage} onReport={(report, status) => void handleReport(report, status)} logs={data.logs} logTotal={data.logTotal} logPage={logPage} logLoading={data.logLoading} onLogPageChange={setLogPage} settings={data.settings} setSettings={data.setSettings} onSaveSettings={() => void handleSaveSettings()} />
+      <AdminContent active={active} stats={data.stats} posts={data.posts} listLoading={data.listLoading} page={page} totalPages={Math.max(1, Math.ceil(data.stats.total / pageSize))} onPageChange={setPage} onEditPost={(post) => void openEdit(post)} onPublishPost={(post) => void handlePublish(post)} onModeratePost={(post) => void handleModeration(post)} onDeletePost={handleDelete} users={data.users} userTotal={data.userTotal} userPage={userPage} userLoading={data.userLoading} onUserPageChange={setUserPage} onToggleUser={(member) => void updateAdminUser(member.id, { status: member.status === 'active' ? 'muted' : 'active' }).then(data.loadUsers).catch((reason: Error) => setError(reason.message))} comments={data.comments} commentTotal={data.commentTotal} commentPage={commentPage} commentLoading={data.commentLoading} commentPostFilter={commentPostFilter} setCommentPostFilter={setCommentPostFilter} onCommentPageChange={setCommentPage} onCommentStatus={(comment) => void handleCommentStatus(comment)} onCommentsBatch={(ids, status) => void handleCommentsBatch(ids, status)} onDeleteComment={handleRemoveComment} tagData={data.tagData} newCategory={data.newCategory} setNewCategory={data.setNewCategory} onCreateCategory={() => void handleCreateCategory()} onDeleteCategory={handleDeleteCategory} onDeleteTag={handleDeleteTag} reports={data.reports} reportStatus={reportStatus} reportTotal={data.reportTotal} reportPage={reportPage} reportLoading={data.reportLoading} onReportStatusChange={(status) => { setReportStatus(status); setReportPage(1) }} onReportPageChange={setReportPage} onReport={(report, status) => void handleReport(report, status)} onReportsBatch={(ids, status) => void handleReportsBatch(ids, status)} logs={data.logs} logTotal={data.logTotal} logPage={logPage} logLoading={data.logLoading} onLogPageChange={setLogPage} settings={data.settings} setSettings={data.setSettings} onSaveSettings={() => void handleSaveSettings()} />
     </div>
     {showEditor && <AdminPostEditor editingID={editingID} editorLoading={editorLoading} saving={saving} error={error} draft={draft} categories={data.tagData.categories} setDraft={setDraft} onClose={() => setShowEditor(false)} onSubmit={handleSubmit} onSaveDraft={() => void submitDraft('draft')} />}
     <ConfirmDialog open={Boolean(confirmRequest)} title={confirmRequest?.title ?? ''} message={confirmRequest?.message} onCancel={() => setConfirmRequest(undefined)} onConfirm={async () => { const action = confirmRequest?.action; setConfirmRequest(undefined); if (action) await action() }} />

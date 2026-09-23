@@ -1,5 +1,6 @@
 import { ChevronLeft, ChevronRight, Eye, EyeOff, Flag, History, MessageSquare, Pencil, Plus, Settings, Tag, Trash2, UserRound } from 'lucide-react'
 import type { Dispatch, SetStateAction } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { AdminSettings, AdminStats, AdminUser } from '../../services/api'
 import type { AdminComment, AdminLogEntry, AdminReport, PostStatus, PostSummary, TagUsage } from '../../types'
@@ -36,6 +37,7 @@ type AdminContentProps = {
   onCommentPageChange: (page: number) => void
   setCommentPostFilter: Dispatch<SetStateAction<number | undefined>>
   onCommentStatus: (comment: AdminComment) => void
+  onCommentsBatch?: (ids: number[], status: 'published' | 'hidden') => void
   onDeleteComment: (comment: AdminComment) => void
   tagData: { tags: TagUsage[]; categories: TagUsage[] }
   newCategory: string
@@ -51,6 +53,7 @@ type AdminContentProps = {
   onReportStatusChange: (status: string) => void
   onReportPageChange: (page: number) => void
   onReport: (report: AdminReport, status: 'handled' | 'dismissed') => void
+  onReportsBatch?: (ids: number[], status: 'handled' | 'dismissed') => void
   logs: AdminLogEntry[]
   logTotal: number
   logPage: number
@@ -122,14 +125,18 @@ function UserContent({ props }: { props: AdminContentProps }) {
 }
 
 function CommentContent({ props }: { props: AdminContentProps }) {
-  const { stats, comments, commentTotal, commentPage, commentLoading, commentPostFilter, setCommentPostFilter, onCommentStatus, onDeleteComment } = props
+  const { stats, comments, commentTotal, commentPage, commentLoading, commentPostFilter, setCommentPostFilter, onCommentStatus, onCommentsBatch, onDeleteComment } = props
+  const [selected, setSelected] = useState<number[]>([])
+  const toggle = (id: number) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])
+  const selectAll = () => setSelected(selected.length === comments.length ? [] : comments.map((comment) => comment.id))
   return <>
     <div className="admin-stats"><div><span>评论总数</span><strong>{commentTotal.toLocaleString()}</strong><small>全部评论</small></div><div><span>公开评论</span><strong>{stats.comments.toLocaleString()}</strong><small>文章页展示</small></div></div>
-    <div className={`admin-table ${commentLoading ? 'is-loading' : ''}`}>
-      <div className="table-head"><span>评论内容</span><span>文章 / 作者</span><span>状态</span><span>操作</span></div>
+    {selected.length > 0 && onCommentsBatch && <div className="batch-toolbar"><span>已选择 {selected.length} 条</span><button className="button button-light" onClick={() => { onCommentsBatch(selected, 'published'); setSelected([]) }}>批量恢复</button><button className="button button-light" onClick={() => { onCommentsBatch(selected, 'hidden'); setSelected([]) }}>批量隐藏</button></div>}
+    <div className={`admin-table has-selection ${commentLoading ? 'is-loading' : ''}`}>
+      <div className="table-head"><button className="table-select-all" onClick={selectAll} aria-label="全选评论"><input type="checkbox" checked={comments.length > 0 && selected.length === comments.length} readOnly /></button><span>评论内容</span><span>文章 / 作者</span><span>状态</span><span>操作</span></div>
       {commentPostFilter && <div className="context-filter-bar">正在查看单篇文章的评论 <button onClick={() => setCommentPostFilter(undefined)}>查看全部</button></div>}
       {comments.map((comment) => <div className="table-row" key={comment.id}>
-        <div className="table-title"><MessageSquare size={16} /><span><strong>{comment.content.length > 60 ? `${comment.content.slice(0, 60)}…` : comment.content}</strong><small>{formatDate(comment.createdAt)}</small></span></div>
+        <label className="table-select"><input type="checkbox" checked={selected.includes(comment.id)} onChange={() => toggle(comment.id)} aria-label={`选择评论 ${comment.id}`} /></label><div className="table-title"><MessageSquare size={16} /><span><strong>{comment.content.length > 60 ? `${comment.content.slice(0, 60)}…` : comment.content}</strong><small>{comment.pinned ? '已置顶 · ' : ''}{formatDate(comment.createdAt)}</small></span></div>
         <button className="status-button context-link" onClick={() => setCommentPostFilter(comment.postId)}><strong>{comment.postTitle}</strong><small>@{comment.author.nickname}</small></button>
         <button className="status-dot status-button" onClick={() => onCommentStatus(comment)}><i className={comment.status === 'hidden' ? 'is-archived' : ''} /> {commentStatusLabels[comment.status] ?? comment.status}</button>
         <div className="table-actions"><button className="icon-button" onClick={() => onDeleteComment(comment)} aria-label="删除评论"><Trash2 size={15} /></button></div>
@@ -162,10 +169,14 @@ function TagContent({ props }: { props: AdminContentProps }) {
 }
 
 function ReportContent({ props }: { props: AdminContentProps }) {
-  const { reports, reportStatus, reportTotal, reportPage, reportLoading, onReportStatusChange, onReportPageChange, onReport } = props
+  const { reports, reportStatus, reportTotal, reportPage, reportLoading, onReportStatusChange, onReportPageChange, onReport, onReportsBatch } = props
+  const [selected, setSelected] = useState<number[]>([])
+  const toggle = (id: number) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])
+  const selectAll = () => setSelected(selected.length === reports.length ? [] : reports.map((report) => report.id))
   return <>
     <div className="feed-tabs report-tabs">{['pending', 'handled', 'dismissed'].map((status) => <button key={status} className={reportStatus === status ? 'is-active' : ''} onClick={() => onReportStatusChange(status)}>{reportStatusLabels[status]}</button>)}</div>
-    <div className={`admin-table ${reportLoading ? 'is-loading' : ''}`}><div className="table-head"><span>举报理由</span><span>举报目标</span><span>状态</span><span>操作</span></div>{reports.length ? reports.map((report) => <div className="table-row" key={report.id}><div className="table-title"><Flag size={16} /><span><strong>{report.reason}</strong><small>@{report.reporter.username} · {formatDate(report.createdAt)}</small></span></div><span>{report.targetSummary}</span><span className="status-dot"><i className={report.status === 'pending' ? 'is-draft' : 'is-archived'} /> {reportStatusLabels[report.status]}</span><div className="table-actions">{report.status === 'pending' && <><button className="icon-button" onClick={() => onReport(report, 'handled')}>已处理</button><button className="icon-button" onClick={() => onReport(report, 'dismissed')}>驳回</button></>}</div></div>) : <div className="table-row"><span>当前没有{reportStatusLabels[reportStatus]}的举报。</span><span /><span /><span /></div>}</div>
+    {selected.length > 0 && onReportsBatch && <div className="batch-toolbar"><span>已选择 {selected.length} 条</span><button className="button button-light" onClick={() => { onReportsBatch(selected, 'handled'); setSelected([]) }}>批量处理</button><button className="button button-light" onClick={() => { onReportsBatch(selected, 'dismissed'); setSelected([]) }}>批量驳回</button></div>}
+    <div className={`admin-table has-selection ${reportLoading ? 'is-loading' : ''}`}><div className="table-head"><button className="table-select-all" onClick={selectAll} aria-label="全选举报"><input type="checkbox" checked={reports.length > 0 && selected.length === reports.length} readOnly /></button><span>举报理由</span><span>举报目标</span><span>状态</span><span>操作</span></div>{reports.length ? reports.map((report) => <div className="table-row" key={report.id}><label className="table-select"><input type="checkbox" checked={selected.includes(report.id)} onChange={() => toggle(report.id)} aria-label={`选择举报 ${report.id}`} /></label><div className="table-title"><Flag size={16} /><span><strong>{report.reason}</strong><small>@{report.reporter.username} · {formatDate(report.createdAt)}</small></span></div><span>{report.targetSummary}</span><span className="status-dot"><i className={report.status === 'pending' ? 'is-draft' : 'is-archived'} /> {reportStatusLabels[report.status]}</span><div className="table-actions">{report.status === 'pending' && <><button className="icon-button" onClick={() => onReport(report, 'handled')}>已处理</button><button className="icon-button" onClick={() => onReport(report, 'dismissed')}>驳回</button></>}</div></div>) : <div className="table-row"><span>当前没有{reportStatusLabels[reportStatus]}的举报。</span><span /><span /><span /><span /></div>}</div>
     <Pagination page={reportPage} total={Math.max(1, Math.ceil(reportTotal / 20))} onChange={onReportPageChange} />
   </>
 }
