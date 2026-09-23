@@ -2,7 +2,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Bell, FileText, Github, House, Info, LogIn, Mail, PenLine, Rss, UserCircle, UserPlus, type LucideIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { BrandMark } from './BrandMark'
-import { getCurrentUser, getNotifications, logout, type AuthUser } from '../services/api'
+import { AUTH_EXPIRED_EVENT, getCurrentUser, getNotifications, logout, type AuthUser } from '../services/api'
 
 type NavItem = { to: string; label: string; icon: LucideIcon }
 
@@ -68,6 +68,21 @@ export function Shell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     getCurrentUser().then(setUser).catch(() => setUser(undefined))
   }, [location.pathname, location.search])
+
+  // 受保护请求返回 401 时统一清理导航状态，并回到对应的登录入口。
+  useEffect(() => {
+    const handleAuthExpired = () => {
+      setUser(undefined)
+      setUnread(0)
+      if (location.pathname.startsWith('/admin')) {
+        navigate('/admin', { replace: true })
+      } else if (location.pathname !== '/login' && location.pathname !== '/register') {
+        navigate('/login', { replace: true })
+      }
+    }
+    window.addEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired)
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired)
+  }, [location.pathname, navigate])
 
   // 登录后加载未读通知数，用于导航栏铃铛角标
   useEffect(() => {

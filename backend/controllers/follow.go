@@ -35,7 +35,9 @@ func (cc *CommunityController) FollowUser(c *gin.Context) {
 	}
 	var follow models.Follow
 	if err := cc.DB.Where("follower_id = ? AND following_id = ?", userID, targetID).First(&follow).Error; err == nil {
-		cc.followResponse(c, userID, uint(targetID), true)
+		if err := cc.followResponse(c, userID, uint(targetID), true); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取关注数据失败"})
+		}
 		return
 	}
 	if err := cc.DB.Create(&models.Follow{FollowerID: userID, FollowingID: uint(targetID)}).Error; err != nil {
@@ -47,7 +49,9 @@ func (cc *CommunityController) FollowUser(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "关注失败，请重试"})
 		return
 	}
-	cc.followResponse(c, userID, uint(targetID), true)
+	if err := cc.followResponse(c, userID, uint(targetID), true); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取关注数据失败"})
+	}
 }
 
 func (cc *CommunityController) UnfollowUser(c *gin.Context) {
@@ -56,8 +60,13 @@ func (cc *CommunityController) UnfollowUser(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "用户不存在"})
 		return
 	}
-	cc.DB.Where("follower_id = ? AND following_id = ?", currentUserID(c), targetID).Delete(&models.Follow{})
-	cc.followResponse(c, currentUserID(c), uint(targetID), false)
+	if err := cc.DB.Where("follower_id = ? AND following_id = ?", currentUserID(c), targetID).Delete(&models.Follow{}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "取消关注失败"})
+		return
+	}
+	if err := cc.followResponse(c, currentUserID(c), uint(targetID), false); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取关注数据失败"})
+	}
 }
 
 // Profile 用户公开主页：基本资料、公开文章列表与关注数据
@@ -67,10 +76,17 @@ func (cc *CommunityController) Profile(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "用户不存在"})
 		return
 	}
-	profile := cc.profileData(user)
+	profile, err := cc.profileData(user)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取用户资料失败"})
+		return
+	}
 	var following int64
 	if currentUserID(c) > 0 {
-		cc.DB.Model(&models.Follow{}).Where("follower_id = ? AND following_id = ?", currentUserID(c), user.ID).Count(&following)
+		if err := cc.DB.Model(&models.Follow{}).Where("follower_id = ? AND following_id = ?", currentUserID(c), user.ID).Count(&following).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取关注数据失败"})
+			return
+		}
 	}
 	profile.FollowingMe = following > 0
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": profile})
@@ -78,22 +94,34 @@ func (cc *CommunityController) Profile(c *gin.Context) {
 
 func (cc *CommunityController) followResponse(c *gin.Context, followerID, followingID uint, following bool) error {
 	var followers int64
-	cc.DB.Model(&models.Follow{}).Where("following_id = ?", followingID).Count(&followers)
+	if err := cc.DB.Model(&models.Follow{}).Where("following_id = ?", followingID).Count(&followers).Error; err != nil {
+		return err
+	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"following": following, "followers": followers, "followerId": followerID}})
 	return nil
 }
 
-func (cc *CommunityController) profileData(user models.User) UserProfileDTO {
+func (cc *CommunityController) profileData(user models.User) (UserProfileDTO, error) {
 	var posts []models.Post
-	cc.DB.Where("author_id = ? AND status = ? AND moderation_status = ?", user.ID, "published", "normal").Preload("Tags").Preload("Author").Preload("Category").Order("published_at DESC, id DESC").Limit(30).Find(&posts)
+	if err := cc.DB.Where("author_id = ? AND status = ? AND moderation_status = ?", user.ID, "published", "normal").Preload("Tags").Preload("Author").Preload("Category").Order("published_at DESC, id DESC").Limit(30).Find(&posts).Error; err != nil {
+		return UserProfileDTO{}, err
+	}
 	var postCount, likeCount, followers, following int64
-	cc.DB.Model(&models.Post{}).Where("author_id = ? AND status = ? AND moderation_status = ?", user.ID, "published", "normal").Count(&postCount)
-	cc.DB.Model(&models.PostLike{}).Joins("JOIN posts ON posts.id = post_likes.post_id").Where("posts.author_id = ?", user.ID).Count(&likeCount)
-	cc.DB.Model(&models.Follow{}).Where("following_id = ?", user.ID).Count(&followers)
-	cc.DB.Model(&models.Follow{}).Where("follower_id = ?", user.ID).Count(&following)
+	if err := cc.DB.Model(&models.Post{}).Where("author_id = ? AND status = ? AND moderation_status = ?", user.ID, "published", "normal").Count(&postCount).Error; err != nil {
+		return UserProfileDTO{}, err
+	}
+	if err := cc.DB.Model(&models.PostLike{}).Joins("JOIN posts ON posts.id = post_likes.post_id").Where("posts.author_id = ?", user.ID).Count(&likeCount).Error; err != nil {
+		return UserProfileDTO{}, err
+	}
+	if err := cc.DB.Model(&models.Follow{}).Where("following_id = ?", user.ID).Count(&followers).Error; err != nil {
+		return UserProfileDTO{}, err
+	}
+	if err := cc.DB.Model(&models.Follow{}).Where("follower_id = ?", user.ID).Count(&following).Error; err != nil {
+		return UserProfileDTO{}, err
+	}
 	items := make([]PostSummaryDTO, 0, len(posts))
 	for _, post := range posts {
 		items = append(items, toPostSummaryDTO(post))
 	}
-	return UserProfileDTO{User: toUserDTO(user), Posts: items, PostCount: postCount, LikeCount: likeCount, Followers: followers, Following: following}
+	return UserProfileDTO{User: toUserDTO(user), Posts: items, PostCount: postCount, LikeCount: likeCount, Followers: followers, Following: following}, nil
 }

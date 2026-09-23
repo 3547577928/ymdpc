@@ -17,14 +17,24 @@ export type AdminUser = UserSummary & { status: string; postCount: number; likeC
 
 // 请求超时：后端无响应时及时失败，避免页面长期停留在加载态
 const REQUEST_TIMEOUT_MS = 15_000
+export const AUTH_EXPIRED_EVENT = 'quietsig:auth-expired'
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const headers = new Headers(options?.headers)
-  if (options?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+type RequestOptions = RequestInit & { suppressAuthExpired?: boolean }
+
+function notifyAuthExpired() {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT))
+  }
+}
+
+async function request<T>(path: string, options?: RequestOptions): Promise<T> {
+  const { suppressAuthExpired = false, ...fetchOptions } = options ?? {}
+  const headers = new Headers(fetchOptions.headers)
+  if (fetchOptions.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   let response: Response
   try {
     response = await fetch(`${API_BASE}${path}`, {
-      ...options,
+      ...fetchOptions,
       credentials: 'include',
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers,
@@ -41,6 +51,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     message: response.ok ? '服务器响应格式错误' : `请求失败 (${response.status})`,
   })) as ApiPayload<T>
   if (!response.ok || payload.code !== 0) {
+    if (response.status === 401 && !suppressAuthExpired) notifyAuthExpired()
     throw new Error(payload.message || `请求失败 (${response.status})`)
   }
   return payload.data
@@ -65,19 +76,19 @@ export function getTags() {
 }
 
 export function login(username: string, password: string) {
-  return request<AuthUser>('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) })
+  return request<AuthUser>('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }), suppressAuthExpired: true })
 }
 
 export function register(username: string, password: string, nickname: string) {
-  return request<AuthUser>('/auth/register', { method: 'POST', body: JSON.stringify({ username, password, nickname }) })
+  return request<AuthUser>('/auth/register', { method: 'POST', body: JSON.stringify({ username, password, nickname }), suppressAuthExpired: true })
 }
 
 export function logout() {
-  return request<void>('/auth/logout', { method: 'POST' })
+  return request<void>('/auth/logout', { method: 'POST', suppressAuthExpired: true })
 }
 
 export function getCurrentUser() {
-  return request<AuthUser>('/auth/me')
+  return request<AuthUser>('/auth/me', { suppressAuthExpired: true })
 }
 
 export function updateProfile(input: { nickname: string; avatar: string; bio: string }) {

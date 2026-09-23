@@ -50,9 +50,21 @@ func (cc *CommunityController) AdminUsers(c *gin.Context) {
 	for _, user := range users {
 		ids = append(ids, user.ID)
 	}
-	postCounts := countPostsByAuthor(cc.DB, ids)
-	likeCounts := countLikesByAuthor(cc.DB, ids)
-	followers, following := countFollowsByUser(cc.DB, ids)
+	postCounts, err := countPostsByAuthor(cc.DB, ids)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取用户统计失败"})
+		return
+	}
+	likeCounts, err := countLikesByAuthor(cc.DB, ids)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取用户统计失败"})
+		return
+	}
+	followers, following, err := countFollowsByUser(cc.DB, ids)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取用户统计失败"})
+		return
+	}
 	items := make([]AdminUserDTO, 0, len(users))
 	for _, user := range users {
 		items = append(items, AdminUserDTO{
@@ -123,66 +135,87 @@ func (cc *CommunityController) UpdateUser(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取用户失败"})
 		return
 	}
-	followers, following := countFollowsByUser(cc.DB, []uint{user.ID})
+	ids := []uint{user.ID}
+	postCounts, err := countPostsByAuthor(cc.DB, ids)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取用户统计失败"})
+		return
+	}
+	likeCounts, err := countLikesByAuthor(cc.DB, ids)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取用户统计失败"})
+		return
+	}
+	followers, following, err := countFollowsByUser(cc.DB, ids)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取用户统计失败"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": AdminUserDTO{
 		UserDTO:   toUserDTO(user),
 		Status:    user.Status,
-		PostCount: countPostsByAuthor(cc.DB, []uint{user.ID})[user.ID],
-		LikeCount: countLikesByAuthor(cc.DB, []uint{user.ID})[user.ID],
+		PostCount: postCounts[user.ID],
+		LikeCount: likeCounts[user.ID],
 		Followers: followers[user.ID],
 		Following: following[user.ID],
 	}})
 }
 
 // countPostsByAuthor 批量统计每个作者的文章数（含草稿等全部状态），管理端列表使用
-func countPostsByAuthor(db *gorm.DB, ids []uint) map[uint]int64 {
+func countPostsByAuthor(db *gorm.DB, ids []uint) (map[uint]int64, error) {
 	counts := map[uint]int64{}
 	if len(ids) == 0 {
-		return counts
+		return counts, nil
 	}
 	var rows []struct {
 		AuthorID uint
 		Count    int64
 	}
-	db.Model(&models.Post{}).Select("author_id, COUNT(*) AS count").Where("author_id IN ?", ids).Group("author_id").Scan(&rows)
+	if err := db.Model(&models.Post{}).Select("author_id, COUNT(*) AS count").Where("author_id IN ?", ids).Group("author_id").Scan(&rows).Error; err != nil {
+		return nil, err
+	}
 	for _, row := range rows {
 		counts[row.AuthorID] = row.Count
 	}
-	return counts
+	return counts, nil
 }
 
 // countLikesByAuthor 批量统计每个作者的全部文章获赞数
-func countLikesByAuthor(db *gorm.DB, ids []uint) map[uint]int64 {
+func countLikesByAuthor(db *gorm.DB, ids []uint) (map[uint]int64, error) {
 	counts := map[uint]int64{}
 	if len(ids) == 0 {
-		return counts
+		return counts, nil
 	}
 	var rows []struct {
 		AuthorID uint
 		Count    int64
 	}
-	db.Model(&models.PostLike{}).
+	if err := db.Model(&models.PostLike{}).
 		Select("posts.author_id AS author_id, COUNT(*) AS count").
 		Joins("JOIN posts ON posts.id = post_likes.post_id").
-		Where("posts.author_id IN ?", ids).Group("posts.author_id").Scan(&rows)
+		Where("posts.author_id IN ?", ids).Group("posts.author_id").Scan(&rows).Error; err != nil {
+		return nil, err
+	}
 	for _, row := range rows {
 		counts[row.AuthorID] = row.Count
 	}
-	return counts
+	return counts, nil
 }
 
 // countFollowsByUser 批量统计每个用户的粉丝数与关注数
-func countFollowsByUser(db *gorm.DB, ids []uint) (followers, following map[uint]int64) {
+func countFollowsByUser(db *gorm.DB, ids []uint) (followers, following map[uint]int64, err error) {
 	followers = map[uint]int64{}
 	following = map[uint]int64{}
 	if len(ids) == 0 {
-		return followers, following
+		return followers, following, nil
 	}
 	var byFollowing []struct {
 		FollowingID uint
 		Count       int64
 	}
-	db.Model(&models.Follow{}).Select("following_id, COUNT(*) AS count").Where("following_id IN ?", ids).Group("following_id").Scan(&byFollowing)
+	if err := db.Model(&models.Follow{}).Select("following_id, COUNT(*) AS count").Where("following_id IN ?", ids).Group("following_id").Scan(&byFollowing).Error; err != nil {
+		return nil, nil, err
+	}
 	for _, row := range byFollowing {
 		followers[row.FollowingID] = row.Count
 	}
@@ -190,11 +223,13 @@ func countFollowsByUser(db *gorm.DB, ids []uint) (followers, following map[uint]
 		FollowerID uint
 		Count      int64
 	}
-	db.Model(&models.Follow{}).Select("follower_id, COUNT(*) AS count").Where("follower_id IN ?", ids).Group("follower_id").Scan(&byFollower)
+	if err := db.Model(&models.Follow{}).Select("follower_id, COUNT(*) AS count").Where("follower_id IN ?", ids).Group("follower_id").Scan(&byFollower).Error; err != nil {
+		return nil, nil, err
+	}
 	for _, row := range byFollower {
 		following[row.FollowerID] = row.Count
 	}
-	return followers, following
+	return followers, following, nil
 }
 
 // ActiveUserDTO 概览中的活跃用户条目
@@ -224,18 +259,45 @@ func (cc *CommunityController) UserStats(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取统计失败"})
 		return
 	}
-	cc.DB.Model(&models.Post{}).Count(&stats.Posts)
+	if err := cc.DB.Model(&models.Post{}).Count(&stats.Posts).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取统计失败"})
+		return
+	}
 	stats.Total = stats.Posts
-	cc.DB.Model(&models.Post{}).Where("status = ?", "published").Count(&stats.Published)
-	cc.DB.Model(&models.Post{}).Select("COALESCE(SUM(views), 0)").Scan(&stats.Views)
-	cc.DB.Model(&models.PostLike{}).Count(&stats.Likes)
-	cc.DB.Model(&models.Comment{}).Where("status = ?", "published").Count(&stats.Comments)
-	cc.DB.Model(&models.Follow{}).Count(&stats.Followers)
+	if err := cc.DB.Model(&models.Post{}).Where("status = ?", "published").Count(&stats.Published).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取统计失败"})
+		return
+	}
+	if err := cc.DB.Model(&models.Post{}).Select("COALESCE(SUM(views), 0)").Scan(&stats.Views).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取统计失败"})
+		return
+	}
+	if err := cc.DB.Model(&models.PostLike{}).Count(&stats.Likes).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取统计失败"})
+		return
+	}
+	if err := cc.DB.Model(&models.Comment{}).Where("status = ?", "published").Count(&stats.Comments).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取统计失败"})
+		return
+	}
+	if err := cc.DB.Model(&models.Follow{}).Count(&stats.Followers).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取统计失败"})
+		return
+	}
 	// 今日新增按最近 24 小时统计
 	since := time.Now().Add(-24 * time.Hour)
-	cc.DB.Model(&models.User{}).Where("created_at >= ?", since).Count(&stats.TodayUsers)
-	cc.DB.Model(&models.Post{}).Where("created_at >= ?", since).Count(&stats.TodayPosts)
-	cc.DB.Model(&models.Comment{}).Where("created_at >= ?", since).Count(&stats.TodayComments)
+	if err := cc.DB.Model(&models.User{}).Where("created_at >= ?", since).Count(&stats.TodayUsers).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取统计失败"})
+		return
+	}
+	if err := cc.DB.Model(&models.Post{}).Where("created_at >= ?", since).Count(&stats.TodayPosts).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取统计失败"})
+		return
+	}
+	if err := cc.DB.Model(&models.Comment{}).Where("created_at >= ?", since).Count(&stats.TodayComments).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取统计失败"})
+		return
+	}
 	// 活跃用户：近 7 天发文与评论合计最多的前 5 位
 	week := time.Now().Add(-7 * 24 * time.Hour)
 	var rows []struct {
@@ -247,10 +309,13 @@ func (cc *CommunityController) UserStats(c *gin.Context) {
 		PostCount    int64
 		CommentCount int64
 	}
-	cc.DB.Raw(`SELECT u.id, u.username, u.nickname, u.avatar, u.created_at,
+	if err := cc.DB.Raw(`SELECT u.id, u.username, u.nickname, u.avatar, u.created_at,
 		(SELECT COUNT(*) FROM posts p WHERE p.author_id = u.id AND p.created_at >= ?) AS post_count,
 		(SELECT COUNT(*) FROM comments cm WHERE cm.author_id = u.id AND cm.created_at >= ?) AS comment_count
-		FROM users u ORDER BY post_count + comment_count DESC, u.id ASC LIMIT 5`, week, week).Scan(&rows)
+		FROM users u ORDER BY post_count + comment_count DESC, u.id ASC LIMIT 5`, week, week).Scan(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取统计失败"})
+		return
+	}
 	activeUsers := make([]ActiveUserDTO, 0, len(rows))
 	for _, row := range rows {
 		activeUsers = append(activeUsers, ActiveUserDTO{

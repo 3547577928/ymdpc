@@ -585,8 +585,11 @@ func (ic *InteractionController) AdminTags(c *gin.Context) {
 		TagID uint
 		Count int64
 	}
-	ic.DB.Model(&models.Post{}).Select("pt.tag_id AS tag_id, COUNT(*) AS count").
-		Joins("JOIN post_tags pt ON pt.post_id = posts.id").Group("pt.tag_id").Scan(&tagRows)
+	if err := ic.DB.Model(&models.Post{}).Select("pt.tag_id AS tag_id, COUNT(*) AS count").
+		Joins("JOIN post_tags pt ON pt.post_id = posts.id").Group("pt.tag_id").Scan(&tagRows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取标签统计失败"})
+		return
+	}
 	for _, row := range tagRows {
 		tagUsage[row.TagID] = row.Count
 	}
@@ -595,8 +598,11 @@ func (ic *InteractionController) AdminTags(c *gin.Context) {
 		CategoryID uint
 		Count      int64
 	}
-	ic.DB.Model(&models.Post{}).Select("category_id, COUNT(*) AS count").
-		Where("category_id IS NOT NULL").Group("category_id").Scan(&categoryRows)
+	if err := ic.DB.Model(&models.Post{}).Select("category_id, COUNT(*) AS count").
+		Where("category_id IS NOT NULL").Group("category_id").Scan(&categoryRows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取分类统计失败"})
+		return
+	}
 	for _, row := range categoryRows {
 		categoryUsage[row.CategoryID] = row.Count
 	}
@@ -628,7 +634,10 @@ func (ic *InteractionController) CreateCategory(c *gin.Context) {
 	}
 	name := strings.TrimSpace(input.Name)
 	var count int64
-	ic.DB.Model(&models.Category{}).Where("name = ?", name).Count(&count)
+	if err := ic.DB.Model(&models.Category{}).Where("name = ?", name).Count(&count).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "检查分类失败"})
+		return
+	}
 	if count > 0 {
 		c.JSON(http.StatusConflict, gin.H{"code": 409, "message": "分类已存在"})
 		return

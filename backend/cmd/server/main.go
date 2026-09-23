@@ -49,6 +49,9 @@ func main() {
 	if err := migrateDB.AutoMigrate(&models.User{}, &models.Post{}, &models.Tag{}, &models.Comment{}, &models.PostLike{}, &models.Follow{}, &models.Category{}, &models.Favorite{}, &models.CommentLike{}, &models.Notification{}, &models.Report{}, &models.AdminLog{}, &models.Setting{}); err != nil {
 		log.Fatalf("migrate database: %v", err)
 	}
+	if err := models.EnsureIndexes(migrateDB); err != nil {
+		log.Fatalf("create database indexes: %v", err)
+	}
 	if sqlDB, err := migrateDB.DB(); err == nil {
 		sqlDB.Close()
 	}
