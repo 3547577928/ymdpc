@@ -102,13 +102,15 @@ func deletePostRelations(tx *gorm.DB, postID uint) error {
 }
 
 // resolveCategory 校验文章关联的分类存在
-func resolveCategory(tx *gorm.DB, categoryID *uint) bool {
+func resolveCategory(tx *gorm.DB, categoryID *uint) (bool, error) {
 	if categoryID == nil {
-		return true
+		return true, nil
 	}
 	var count int64
-	tx.Model(&models.Category{}).Where("id = ?", *categoryID).Count(&count)
-	return count > 0
+	if err := tx.Model(&models.Category{}).Where("id = ?", *categoryID).Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 // FavoritePost 收藏文章，重复收藏幂等返回
@@ -144,16 +146,23 @@ func (ic *InteractionController) UnfavoritePost(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "文章不存在"})
 		return
 	}
-	result := ic.DB.Where("user_id = ? AND post_id = ?", userID, post.ID).Delete(&models.Favorite{})
-	if result.Error != nil {
+	favoriteCount := post.FavoriteCount
+	if err := ic.DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Where("user_id = ? AND post_id = ?", userID, post.ID).Delete(&models.Favorite{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected > 0 {
+			if err := tx.Model(&models.Post{}).Where("id = ? AND favorite_count > 0", post.ID).UpdateColumn("favorite_count", gorm.Expr("favorite_count - 1")).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Model(&models.Post{}).Select("favorite_count").Where("id = ?", post.ID).Scan(&favoriteCount).Error
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "取消收藏失败"})
 		return
 	}
-	if result.RowsAffected > 0 {
-		ic.DB.Model(&models.Post{}).Where("id = ? AND favorite_count > 0", post.ID).UpdateColumn("favorite_count", gorm.Expr("favorite_count - 1"))
-	}
-	ic.DB.Select("favorite_count").First(&post, post.ID)
-	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"favorited": false, "favoriteCount": post.FavoriteCount}})
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"favorited": false, "favoriteCount": favoriteCount}})
 }
 
 // MyPosts 当前用户的文章列表，包含草稿与归档，可按状态筛选
@@ -256,16 +265,23 @@ func (ic *InteractionController) UnlikeComment(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "评论不存在"})
 		return
 	}
-	result := ic.DB.Where("user_id = ? AND comment_id = ?", userID, comment.ID).Delete(&models.CommentLike{})
-	if result.Error != nil {
+	likesCount := comment.LikesCount
+	if err := ic.DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Where("user_id = ? AND comment_id = ?", userID, comment.ID).Delete(&models.CommentLike{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected > 0 {
+			if err := tx.Model(&models.Comment{}).Where("id = ? AND likes_count > 0", comment.ID).UpdateColumn("likes_count", gorm.Expr("likes_count - 1")).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Model(&models.Comment{}).Select("likes_count").Where("id = ?", comment.ID).Scan(&likesCount).Error
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "取消点赞失败"})
 		return
 	}
-	if result.RowsAffected > 0 {
-		ic.DB.Model(&models.Comment{}).Where("id = ? AND likes_count > 0", comment.ID).UpdateColumn("likes_count", gorm.Expr("likes_count - 1"))
-	}
-	ic.DB.Select("likes_count").First(&comment, comment.ID)
-	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"liked": false, "likesCount": comment.LikesCount}})
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"liked": false, "likesCount": likesCount}})
 }
 
 // Notifications 当前用户的通知列表，附带未读数
@@ -279,7 +295,10 @@ func (ic *InteractionController) Notifications(c *gin.Context) {
 		return
 	}
 	var unread int64
-	ic.DB.Model(&models.Notification{}).Where("user_id = ? AND read_at IS NULL", userID).Count(&unread)
+	if err := ic.DB.Model(&models.Notification{}).Where("user_id = ? AND read_at IS NULL", userID).Count(&unread).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取通知失败"})
+		return
+	}
 	var notifications []models.Notification
 	if err := query.Preload("Actor").Order("created_at DESC, id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&notifications).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取通知失败"})
@@ -287,7 +306,11 @@ func (ic *InteractionController) Notifications(c *gin.Context) {
 	}
 	// 通知的目标资源可能是文章或被回复的评论，逐条查询会产生 N+1，
 	// 这里按通知 ID 批量预取文章元信息后查表填充
-	metaByNotification := notificationPostMeta(ic.DB, notifications)
+	metaByNotification, err := notificationPostMeta(ic.DB, notifications)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取通知目标失败"})
+		return
+	}
 	items := make([]NotificationDTO, 0, len(notifications))
 	for _, notification := range notifications {
 		item := NotificationDTO{ID: notification.ID, Type: notification.Type, ResourceID: notification.ResourceID, Read: notification.ReadAt != nil, CreatedAt: notification.CreatedAt, Actor: toUserDTO(notification.Actor)}
@@ -311,7 +334,7 @@ type postMeta struct {
 // comment/like/post 类通知的 resource_id 直接指向文章；reply 类指向评论，
 // 需先按评论找到所属文章。整个列表最多三次查询（文章、评论、回复关联文章），
 // 与通知条数无关；文章已被删除时对应通知不填充，前端降级为不可跳转
-func notificationPostMeta(db *gorm.DB, notifications []models.Notification) map[uint]postMeta {
+func notificationPostMeta(db *gorm.DB, notifications []models.Notification) (map[uint]postMeta, error) {
 	postIDs := make([]uint, 0, len(notifications))
 	replyCommentIDs := make([]uint, 0, len(notifications))
 	for _, notification := range notifications {
@@ -326,7 +349,9 @@ func notificationPostMeta(db *gorm.DB, notifications []models.Notification) map[
 	commentPostID := map[uint]uint{}
 	if len(replyCommentIDs) > 0 {
 		var comments []models.Comment
-		db.Select("id", "post_id").Where("id IN ?", replyCommentIDs).Find(&comments)
+		if err := db.Select("id", "post_id").Where("id IN ?", replyCommentIDs).Find(&comments).Error; err != nil {
+			return nil, err
+		}
 		for _, comment := range comments {
 			commentPostID[comment.ID] = comment.PostID
 			postIDs = append(postIDs, comment.PostID)
@@ -335,7 +360,9 @@ func notificationPostMeta(db *gorm.DB, notifications []models.Notification) map[
 	posts := map[uint]postMeta{}
 	if len(postIDs) > 0 {
 		var rows []models.Post
-		db.Select("id", "title", "slug").Where("id IN ?", postIDs).Find(&rows)
+		if err := db.Select("id", "title", "slug").Where("id IN ?", postIDs).Find(&rows).Error; err != nil {
+			return nil, err
+		}
 		for _, row := range rows {
 			posts[row.ID] = postMeta{Title: row.Title, Slug: row.Slug}
 		}
@@ -354,7 +381,7 @@ func notificationPostMeta(db *gorm.DB, notifications []models.Notification) map[
 			meta[notification.ID] = post
 		}
 	}
-	return meta
+	return meta, nil
 }
 
 // MarkNotificationRead 标记通知为已读
@@ -398,14 +425,20 @@ func (ic *InteractionController) CreateReport(c *gin.Context) {
 	switch input.TargetType {
 	case "post":
 		var count int64
-		ic.DB.Model(&models.Post{}).Where("id = ?", input.TargetID).Count(&count)
+		if err := ic.DB.Model(&models.Post{}).Where("id = ?", input.TargetID).Count(&count).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "检查举报目标失败"})
+			return
+		}
 		if count == 0 {
 			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "举报的文章不存在"})
 			return
 		}
 	case "comment":
 		var count int64
-		ic.DB.Model(&models.Comment{}).Where("id = ?", input.TargetID).Count(&count)
+		if err := ic.DB.Model(&models.Comment{}).Where("id = ?", input.TargetID).Count(&count).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "检查举报目标失败"})
+			return
+		}
 		if count == 0 {
 			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "举报的评论不存在"})
 			return
@@ -642,7 +675,12 @@ func (ic *InteractionController) CreateCategory(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"code": 409, "message": "分类已存在"})
 		return
 	}
-	category := models.Category{Name: name, Slug: uniqueCategorySlug(ic.DB, slugify(name))}
+	slug, err := uniqueCategorySlug(ic.DB, slugify(name))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "生成分类标识失败"})
+		return
+	}
+	category := models.Category{Name: name, Slug: slug}
 	if err := ic.DB.Create(&category).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "创建分类失败"})
 		return
@@ -696,16 +734,18 @@ func (ic *InteractionController) DeleteTag(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
 }
 
-func uniqueCategorySlug(db *gorm.DB, base string) string {
+func uniqueCategorySlug(db *gorm.DB, base string) (string, error) {
 	if base == "" {
 		base = "category"
 	}
 	candidate := base
 	for i := 2; ; i++ {
 		var count int64
-		db.Model(&models.Category{}).Where("slug = ?", candidate).Count(&count)
+		if err := db.Model(&models.Category{}).Where("slug = ?", candidate).Count(&count).Error; err != nil {
+			return "", err
+		}
 		if count == 0 {
-			return candidate
+			return candidate, nil
 		}
 		candidate = strconv.Itoa(i) + "-" + base
 	}

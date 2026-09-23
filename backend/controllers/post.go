@@ -243,7 +243,12 @@ func (p *PostController) Create(c *gin.Context) {
 	if slug == "" {
 		slug = input.Title
 	}
-	if !resolveCategory(p.DB, input.CategoryID) {
+	validCategory, err := resolveCategory(p.DB, input.CategoryID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "检查分类失败"})
+		return
+	}
+	if !validCategory {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "分类不存在"})
 		return
 	}
@@ -266,7 +271,10 @@ func (p *PostController) Create(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "创建文章失败"})
 		return
 	}
-	p.DB.Preload("Tags").Preload("Author").First(&post, post.ID)
+	if err := p.DB.Preload("Tags").Preload("Author").First(&post, post.ID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取新文章失败"})
+		return
+	}
 	c.JSON(http.StatusCreated, gin.H{"code": 0, "message": "success", "data": toPostDTO(post)})
 }
 
@@ -287,7 +295,12 @@ func (p *PostController) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "文章状态无效"})
 		return
 	}
-	if !resolveCategory(p.DB, input.CategoryID) {
+	validCategory, err := resolveCategory(p.DB, input.CategoryID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "检查分类失败"})
+		return
+	}
+	if !validCategory {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "分类不存在"})
 		return
 	}
@@ -490,7 +503,11 @@ func replaceTags(tx *gorm.DB, post *models.Post, names []string) error {
 		var tag models.Tag
 		err := tx.Where("name = ?", name).First(&tag).Error
 		if err == gorm.ErrRecordNotFound {
-			tag = models.Tag{Name: name, Slug: uniqueTagSlug(tx, slugify(name))}
+			slug, err := uniqueTagSlug(tx, slugify(name))
+			if err != nil {
+				return err
+			}
+			tag = models.Tag{Name: name, Slug: slug}
 			if err := tx.Create(&tag).Error; err != nil {
 				return err
 			}
@@ -506,31 +523,35 @@ func replaceTags(tx *gorm.DB, post *models.Post, names []string) error {
 	return nil
 }
 
-func uniqueTagSlug(db *gorm.DB, base string) string {
+func uniqueTagSlug(db *gorm.DB, base string) (string, error) {
 	if base == "" {
 		base = "tag"
 	}
 	candidate := base
 	for i := 2; ; i++ {
 		var count int64
-		db.Model(&models.Tag{}).Where("slug = ?", candidate).Count(&count)
+		if err := db.Model(&models.Tag{}).Where("slug = ?", candidate).Count(&count).Error; err != nil {
+			return "", err
+		}
 		if count == 0 {
-			return candidate
+			return candidate, nil
 		}
 		candidate = fmt.Sprintf("%s-%d", base, i)
 	}
 }
 
-func uniqueSlug(db *gorm.DB, base string, id uint) string {
+func uniqueSlug(db *gorm.DB, base string, id uint) (string, error) {
 	if base == "" {
 		base = "untitled-post"
 	}
 	candidate := base
 	for i := 2; ; i++ {
 		var count int64
-		db.Model(&models.Post{}).Where("slug = ? AND id <> ?", candidate, id).Count(&count)
+		if err := db.Model(&models.Post{}).Where("slug = ? AND id <> ?", candidate, id).Count(&count).Error; err != nil {
+			return "", err
+		}
 		if count == 0 {
-			return candidate
+			return candidate, nil
 		}
 		candidate = fmt.Sprintf("%s-%d", base, i)
 	}
@@ -541,12 +562,20 @@ func uniqueSlug(db *gorm.DB, base string, id uint) string {
 // 把并发冲突收敛为重试而不是向用户暴露「创建文章失败」；save 必须只是写库，
 // 不能包含面向客户端的响应，否则重试会写出两份响应
 func savePostWithSlugRetry(db *gorm.DB, base string, post *models.Post, save func(tx *gorm.DB) error) error {
-	post.Slug = uniqueSlug(db, base, post.ID)
-	err := db.Transaction(save)
+	slug, err := uniqueSlug(db, base, post.ID)
+	if err != nil {
+		return err
+	}
+	post.Slug = slug
+	err = db.Transaction(save)
 	if !errors.Is(err, gorm.ErrDuplicatedKey) {
 		return err
 	}
-	post.Slug = uniqueSlug(db, base, post.ID)
+	slug, err = uniqueSlug(db, base, post.ID)
+	if err != nil {
+		return err
+	}
+	post.Slug = slug
 	return db.Transaction(save)
 }
 

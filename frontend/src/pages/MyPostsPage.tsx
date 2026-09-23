@@ -2,6 +2,7 @@ import { ArrowLeft, FileText, Pencil, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { deletePost, getMyPosts } from '../services/api'
+import { ConfirmDialog } from '../components/Dialog'
 import type { PostStatus, PostSummary } from '../types'
 import { formatDate } from '../utils'
 
@@ -23,6 +24,7 @@ export function MyPostsPage() {
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [deleteRequest, setDeleteRequest] = useState<PostSummary>()
   const pageSize = 20
 
   const load = useCallback(async () => {
@@ -42,8 +44,14 @@ export function MyPostsPage() {
     void load()
   }, [load])
 
-  const handleDelete = async (post: PostSummary) => {
-    if (!window.confirm(`确定删除「${post.title}」吗？`)) return
+  const handleDelete = (post: PostSummary) => {
+    setDeleteRequest(post)
+  }
+
+  const confirmDelete = async () => {
+    if (!deleteRequest) return
+    const post = deleteRequest
+    setDeleteRequest(undefined)
     try {
       await deletePost(post.id)
       if (posts.length === 1 && page > 1) setPage((current) => current - 1)
@@ -75,5 +83,6 @@ export function MyPostsPage() {
       </div>)}
     </div> : <div className="empty-state comments-empty"><h2>这里还空着</h2><p>去写下第一篇文章吧。</p><Link className="text-button" to="/write">写文章</Link></div>}
     {totalPages > 1 && <div className="admin-pagination"><button className="icon-button" disabled={page === 1} onClick={() => setPage((current) => current - 1)}>上一页</button><span>{page} / {totalPages}</span><button className="icon-button" disabled={page >= totalPages} onClick={() => setPage((current) => current + 1)}>下一页</button></div>}
+    <ConfirmDialog open={Boolean(deleteRequest)} title="删除文章" message={deleteRequest ? `确定删除「${deleteRequest.title}」吗？` : undefined} onCancel={() => setDeleteRequest(undefined)} onConfirm={confirmDelete} />
   </section>
 }

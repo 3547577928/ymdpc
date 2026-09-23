@@ -5,11 +5,13 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { createComment, createReport, deleteComment, favoritePost, followUser, getComments, getCurrentUser, getPostBySlug, getUserProfile, likeComment, likePost, recordPostView, unfavoritePost, unfollowUser, unlikeComment, unlikePost, type AdjacentPost, type AuthUser } from '../services/api'
 import { CoverImage } from '../components/CoverImage'
+import { ConfirmDialog, NoticeDialog, PromptDialog } from '../components/Dialog'
 import type { Comment, Post } from '../types'
 import { formatDate } from '../utils'
 
 // 评论树节点：顶层评论 + 挂在其下的回复（方案要求评论最多两层）
 type CommentNode = { comment: Comment; replies: Comment[] }
+type ReportRequest = { targetType: 'post' | 'comment'; targetId: number; title: string }
 
 // 后端返回按时间排序的平铺列表，这里重建为两层结构：
 // 回复的回复归到根评论下；父评论已删除的回复提升为顶层，避免丢失
@@ -46,6 +48,10 @@ export function PostPage() {
   const [commentSaving, setCommentSaving] = useState(false)
   const [following, setFollowing] = useState(false)
   const [followBusy, setFollowBusy] = useState(false)
+  const [reportRequest, setReportRequest] = useState<ReportRequest>()
+  const [reportReason, setReportReason] = useState('')
+  const [notice, setNotice] = useState<{ title: string; message: string }>()
+  const [deleteRequest, setDeleteRequest] = useState<Comment>()
 
   useEffect(() => {
     if (!slug) return
@@ -115,30 +121,30 @@ export function PostPage() {
     }
   }
 
-  // 举报文章，弹窗输入理由
-  const reportPost = async () => {
+  // 举报文章，打开统一输入弹窗
+  const reportPost = () => {
     if (!post || !user) return
-    const reason = window.prompt('请输入举报理由（将在管理员审核后处理）')
-    if (!reason || !reason.trim()) return
+    setReportReason('')
+    setReportRequest({ targetType: 'post', targetId: post.id, title: '举报文章' })
+  }
+
+  const submitReport = async () => {
+    if (!reportRequest || !reportReason.trim()) return
     try {
-      await createReport({ targetType: 'post', targetId: post.id, reason: reason.trim() })
-      window.alert('举报已提交，感谢你的反馈')
+      await createReport({ targetType: reportRequest.targetType, targetId: reportRequest.targetId, reason: reportReason.trim() })
+      setReportRequest(undefined)
+      setReportReason('')
+      setNotice({ title: '举报已提交', message: '感谢你的反馈，管理员会在审核后处理。' })
     } catch (reason2) {
       setError(reason2 instanceof Error ? reason2.message : '举报提交失败')
     }
   }
 
   // 举报评论
-  const reportComment = async (comment: Comment) => {
+  const reportComment = (comment: Comment) => {
     if (!user) return
-    const reason = window.prompt('请输入举报理由（将在管理员审核后处理）')
-    if (!reason || !reason.trim()) return
-    try {
-      await createReport({ targetType: 'comment', targetId: comment.id, reason: reason.trim() })
-      window.alert('举报已提交，感谢你的反馈')
-    } catch (reason2) {
-      setError(reason2 instanceof Error ? reason2.message : '举报提交失败')
-    }
+    setReportReason('')
+    setReportRequest({ targetType: 'comment', targetId: comment.id, title: '举报评论' })
   }
 
   // 点赞或取消点赞评论，原地更新列表
@@ -170,8 +176,14 @@ export function PostPage() {
     }
   }
 
-  const removeComment = async (comment: Comment) => {
-    if (!post || !window.confirm('确定删除这条评论吗？')) return
+  const removeComment = (comment: Comment) => {
+    setDeleteRequest(comment)
+  }
+
+  const confirmRemoveComment = async () => {
+    if (!post || !deleteRequest) return
+    const comment = deleteRequest
+    setDeleteRequest(undefined)
     try {
       await deleteComment(comment.id)
       // 后端会把该评论下的回复一并删除，前端同步移除，避免刷新前残留孤儿评论
@@ -202,7 +214,8 @@ export function PostPage() {
   )
 
   return (
-    <article className="article-page">
+    <>
+      <article className="article-page">
       <header className="article-header container">
         <Link className="back-link" to="/posts"><ArrowLeft size={15} /> 返回文章列表</Link>
         <div className="article-kicker"><span className="eyebrow">{post.tags[0] ?? 'Note'}</span><span className="meta-dot" /><span>{formatDate(post.publishedAt)}</span></div>
@@ -221,6 +234,10 @@ export function PostPage() {
         {next ? <Link to={`/posts/${next.slug}`} className="article-nav-item align-right"><span>下一篇 <ArrowRight size={15} /></span><strong>{next.title}</strong></Link> : <span />}
       </div>
       <section className="container comments-section" id="comments"><div className="comments-heading"><div><div className="eyebrow">Discussion</div><h2>评论 {post.commentsCount}</h2></div>{!user && <Link className="text-button" to="/login">登录后参与 <ArrowRight size={15} /></Link>}</div>{user && <div className="comment-composer">{replyTo && <div className="replying">回复 @{replyTo.author.username} <button onClick={() => setReplyTo(undefined)}>取消</button></div>}<textarea value={commentInput} onChange={(event) => setCommentInput(event.target.value)} placeholder="写下你的看法" rows={4} /><button className="button button-dark" onClick={() => void submitComment()} disabled={commentSaving || !commentInput.trim()}><MessageCircle size={15} /> {commentSaving ? '发送中' : '发表评论'}</button></div>}<div className="comments-list">{commentTree.length ? commentTree.map((node) => <div className="comment-thread" key={node.comment.id}>{renderComment(node.comment, false)}{node.replies.length > 0 && <div className="comment-replies">{node.replies.map((reply) => renderComment(reply, true))}</div>}</div>) : <div className="empty-state comments-empty"><h2>还没有评论</h2><p>成为第一个留下观点的人。</p></div>}</div></section>
-    </article>
+      </article>
+      <PromptDialog open={Boolean(reportRequest)} title={reportRequest?.title ?? ''} message="请输入举报理由，管理员审核后会处理。" value={reportReason} placeholder="例如：内容涉及广告、骚扰或违规信息" onChange={setReportReason} onSubmit={submitReport} onCancel={() => { setReportRequest(undefined); setReportReason('') }} />
+      <ConfirmDialog open={Boolean(deleteRequest)} title="删除评论" message="确定删除这条评论吗？它下面的回复也会一并删除。" onCancel={() => setDeleteRequest(undefined)} onConfirm={confirmRemoveComment} />
+      <NoticeDialog open={Boolean(notice)} title={notice?.title ?? ''} message={notice?.message} onCancel={() => setNotice(undefined)} />
+    </>
   )
 }

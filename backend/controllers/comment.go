@@ -126,7 +126,10 @@ func (cc *CommunityController) CreateComment(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "发表评论失败"})
 		return
 	}
-	cc.DB.Preload("Author").First(&comment, comment.ID)
+	if err := cc.DB.Preload("Author").First(&comment, comment.ID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取新评论失败"})
+		return
+	}
 	c.JSON(http.StatusCreated, gin.H{"code": 0, "message": "success", "data": toCommentDTO(comment, false)})
 }
 

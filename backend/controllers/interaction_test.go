@@ -26,6 +26,23 @@ func newInteractionTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func TestResolveCategoryReturnsDatabaseError(t *testing.T) {
+	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "-") + "?mode=memory&cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	categoryID := uint(1)
+	valid, err := resolveCategory(db, &categoryID)
+	if err == nil {
+		t.Fatal("expected category lookup error when the categories table is missing")
+	}
+	if valid {
+		t.Fatal("category should not be valid after a failed lookup")
+	}
+}
+
 // TestFavoritePostFlow 验证收藏、重复收藏幂等与取消收藏
 func TestFavoritePostFlow(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -58,6 +75,9 @@ func TestFavoritePostFlow(t *testing.T) {
 	unfavorite := authenticatedRequest(ic.UnfavoritePost, http.MethodDelete, "/api/posts/post/favorite", "", favoriteParams, users[1].ID, "user")
 	if unfavorite.Code != http.StatusOK {
 		t.Fatalf("unfavorite returned %d", unfavorite.Code)
+	}
+	if !strings.Contains(unfavorite.Body.String(), `"favoriteCount":0`) {
+		t.Fatalf("unexpected unfavorite response: %s", unfavorite.Body.String())
 	}
 	db.First(&stored, post.ID)
 	if stored.FavoriteCount != 0 {
@@ -104,6 +124,14 @@ func TestCommentLikeAndNotificationFlow(t *testing.T) {
 	db.First(&likedComment, comment.ID)
 	if likedComment.LikesCount != 1 {
 		t.Fatalf("expected comment likes 1, got %d", likedComment.LikesCount)
+	}
+	unlike := authenticatedRequest(ic.UnlikeComment, http.MethodDelete, "/api/comments/1/like", "", gin.Params{{Key: "id", Value: "1"}}, users[0].ID, "user")
+	if unlike.Code != http.StatusOK || !strings.Contains(unlike.Body.String(), `"likesCount":0`) {
+		t.Fatalf("unexpected comment unlike response: %d %s", unlike.Code, unlike.Body.String())
+	}
+	db.First(&likedComment, comment.ID)
+	if likedComment.LikesCount != 0 {
+		t.Fatalf("expected comment likes 0 after unlike, got %d", likedComment.LikesCount)
 	}
 
 	// alice 关注 author，author 收到 follow 通知

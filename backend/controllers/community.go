@@ -129,7 +129,12 @@ func (cc *CommunityController) CreatePost(c *gin.Context) {
 	if status != "published" {
 		status = "draft"
 	}
-	if !resolveCategory(cc.DB, input.CategoryID) {
+	validCategory, err := resolveCategory(cc.DB, input.CategoryID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "检查分类失败"})
+		return
+	}
+	if !validCategory {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "分类不存在"})
 		return
 	}
@@ -156,7 +161,10 @@ func (cc *CommunityController) CreatePost(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "创建文章失败"})
 		return
 	}
-	cc.DB.Preload("Tags").Preload("Author").Preload("Category").First(&post, post.ID)
+	if err := cc.DB.Preload("Tags").Preload("Author").Preload("Category").First(&post, post.ID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取新文章失败"})
+		return
+	}
 	c.JSON(http.StatusCreated, gin.H{"code": 0, "message": "success", "data": toPostDTO(post)})
 }
 
@@ -182,7 +190,12 @@ func (cc *CommunityController) UpdatePost(c *gin.Context) {
 	if status != "published" && status != "archived" {
 		status = "draft"
 	}
-	if !resolveCategory(cc.DB, input.CategoryID) {
+	validCategory, err := resolveCategory(cc.DB, input.CategoryID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "检查分类失败"})
+		return
+	}
+	if !validCategory {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "分类不存在"})
 		return
 	}
@@ -285,14 +298,21 @@ func (cc *CommunityController) UnlikePost(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "文章不存在"})
 		return
 	}
-	result := cc.DB.Where("user_id = ? AND post_id = ?", userID, post.ID).Delete(&models.PostLike{})
-	if result.Error != nil {
+	likesCount := post.LikesCount
+	if err := cc.DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Where("user_id = ? AND post_id = ?", userID, post.ID).Delete(&models.PostLike{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected > 0 {
+			if err := tx.Model(&models.Post{}).Where("id = ? AND likes_count > 0", post.ID).UpdateColumn("likes_count", gorm.Expr("likes_count - 1")).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Model(&models.Post{}).Select("likes_count").Where("id = ?", post.ID).Scan(&likesCount).Error
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "取消点赞失败"})
 		return
 	}
-	if result.RowsAffected > 0 {
-		cc.DB.Model(&models.Post{}).Where("id = ? AND likes_count > 0", post.ID).UpdateColumn("likes_count", gorm.Expr("likes_count - 1"))
-	}
-	cc.DB.Select("likes_count").First(&post, post.ID)
-	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"liked": false, "likesCount": post.LikesCount}})
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"liked": false, "likesCount": likesCount}})
 }
