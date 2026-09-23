@@ -5,7 +5,7 @@ import type { AdminSettings, AdminStats, AdminUser } from '../../services/api'
 import type { AdminComment, AdminLogEntry, AdminReport, PostStatus, PostSummary, TagUsage } from '../../types'
 import { formatDate } from '../../utils'
 
-const statusLabels: Record<PostStatus, string> = { draft: '草稿', published: '已发布', archived: '已归档' }
+const statusLabels: Record<PostStatus, string> = { draft: '草稿', scheduled: '待发布', published: '已发布', archived: '已归档' }
 const userStatusLabels: Record<string, string> = { active: '正常', muted: '禁言', banned: '封禁' }
 const commentStatusLabels: Record<string, string> = { published: '公开', hidden: '已隐藏' }
 const reportStatusLabels: Record<string, string> = { pending: '待处理', handled: '已处理', dismissed: '已驳回' }

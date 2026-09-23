@@ -74,6 +74,7 @@ type PostSummaryDTO struct {
 	Favorited        bool         `json:"favorited"`
 	ReadingTime      int          `json:"readingTime"`
 	PublishedAt      time.Time    `json:"publishedAt"`
+	ScheduledAt      *time.Time   `json:"scheduledAt,omitempty"`
 	CreatedAt        time.Time    `json:"createdAt"`
 	UpdatedAt        time.Time    `json:"updatedAt"`
 }
@@ -95,15 +96,16 @@ type PostDetailDTO struct {
 }
 
 type PostRequest struct {
-	Title      string   `json:"title" binding:"required"`
-	Slug       string   `json:"slug"`
-	Summary    string   `json:"summary"`
-	Content    string   `json:"content"`
-	CoverImage string   `json:"coverImage"`
-	Tags       []string `json:"tags"`
-	Status     string   `json:"status"`
-	Featured   bool     `json:"featured"`
-	CategoryID *uint    `json:"categoryId"`
+	Title       string     `json:"title" binding:"required"`
+	Slug        string     `json:"slug"`
+	Summary     string     `json:"summary"`
+	Content     string     `json:"content"`
+	CoverImage  string     `json:"coverImage"`
+	Tags        []string   `json:"tags"`
+	Status      string     `json:"status"`
+	Featured    bool       `json:"featured"`
+	CategoryID  *uint      `json:"categoryId"`
+	ScheduledAt *time.Time `json:"scheduledAt"`
 }
 
 func (p *PostController) List(c *gin.Context) {
@@ -121,7 +123,7 @@ func (p *PostController) AdminList(c *gin.Context) {
 func (p *PostController) list(c *gin.Context, status string, includeDrafts bool) {
 	page, pageSize := pagination(c)
 	query := p.DB.Model(&models.Post{})
-	if !includeDrafts || status == "published" || status == "draft" || status == "archived" {
+	if !includeDrafts || status == "published" || status == "scheduled" || status == "draft" || status == "archived" {
 		if status == "" {
 			status = "published"
 		}
@@ -253,8 +255,9 @@ func (p *PostController) Create(c *gin.Context) {
 		return
 	}
 	post := models.Post{AuthorID: currentUserID(c), Title: strings.TrimSpace(input.Title), Summary: input.Summary, Content: input.Content, CoverImage: input.CoverImage, Status: status, Featured: input.Featured, ReadingTime: readingTime(input.Content), CategoryID: input.CategoryID}
-	if status == "published" {
-		post.PublishedAt = time.Now()
+	if err := applyPostTiming(&post, status, input.ScheduledAt); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		return
 	}
 	if err := savePostWithSlugRetry(p.DB, slugify(slug), &post, func(tx *gorm.DB) error {
 		if err := tx.Create(&post).Error; err != nil {
@@ -304,6 +307,7 @@ func (p *PostController) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "分类不存在"})
 		return
 	}
+	original := post
 	slug := input.Slug
 	if slug == "" {
 		slug = post.Slug
@@ -316,10 +320,14 @@ func (p *PostController) Update(c *gin.Context) {
 	post.Featured = input.Featured
 	post.ReadingTime = readingTime(input.Content)
 	post.CategoryID = input.CategoryID
-	if status == "published" && post.PublishedAt.IsZero() {
-		post.PublishedAt = time.Now()
+	if err := applyPostTiming(&post, status, input.ScheduledAt); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		return
 	}
 	if err := savePostWithSlugRetry(p.DB, slugify(slug), &post, func(tx *gorm.DB) error {
+		if err := savePostRevision(tx, original, currentUserID(c)); err != nil {
+			return err
+		}
 		if err := tx.Save(&post).Error; err != nil {
 			return err
 		}
@@ -364,7 +372,8 @@ func (p *PostController) Delete(c *gin.Context) {
 // UpdateModeration 管理员下架/恢复文章（moderation_status: normal 正常 / hidden 下架）
 func (p *PostController) UpdateModeration(c *gin.Context) {
 	var input struct {
-		Status string `json:"status" binding:"required"`
+		Status      string     `json:"status" binding:"required"`
+		ScheduledAt *time.Time `json:"scheduledAt"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil || (input.Status != "normal" && input.Status != "hidden") {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "审核状态无效"})
@@ -393,7 +402,8 @@ func (p *PostController) UpdateModeration(c *gin.Context) {
 
 func (p *PostController) UpdateStatus(c *gin.Context) {
 	var input struct {
-		Status string `json:"status" binding:"required"`
+		Status      string     `json:"status" binding:"required"`
+		ScheduledAt *time.Time `json:"scheduledAt"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "状态不能为空"})
@@ -409,11 +419,17 @@ func (p *PostController) UpdateStatus(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "文章不存在"})
 		return
 	}
-	updates := map[string]any{"status": status}
-	if status == "published" && post.PublishedAt.IsZero() {
-		updates["published_at"] = time.Now()
+	previousStatus := post.Status
+	if err := applyPostTiming(&post, status, input.ScheduledAt); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		return
 	}
-	shouldNotify := post.Status != "published" && status == "published"
+	var scheduledValue any = post.ScheduledAt
+	if post.ScheduledAt == nil {
+		scheduledValue = gorm.Expr("NULL")
+	}
+	updates := map[string]any{"status": post.Status, "published_at": post.PublishedAt, "scheduled_at": scheduledValue}
+	shouldNotify := previousStatus != "published" && status == "published"
 	if err := p.DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&post).Updates(updates).Error; err != nil {
 			return err
@@ -445,12 +461,29 @@ func normalizeStatus(status string) (string, bool) {
 	switch strings.TrimSpace(status) {
 	case "":
 		return "draft", true
-	case "published", "archived":
+	case "published", "scheduled", "archived":
 		return strings.TrimSpace(status), true
 	case "draft":
 		return "draft", true
 	}
 	return "", false
+}
+
+func applyPostTiming(post *models.Post, status string, scheduledAt *time.Time) error {
+	post.Status = status
+	if status == "scheduled" {
+		if scheduledAt == nil || !scheduledAt.After(time.Now()) {
+			return errors.New("定时发布时间必须晚于当前时间")
+		}
+		post.ScheduledAt = scheduledAt
+		post.PublishedAt = time.Time{}
+		return nil
+	}
+	post.ScheduledAt = nil
+	if status == "published" && post.PublishedAt.IsZero() {
+		post.PublishedAt = time.Now()
+	}
+	return nil
 }
 
 func toPostDTO(post models.Post) PostDTO {
@@ -462,7 +495,7 @@ func toPostSummaryDTO(post models.Post) PostSummaryDTO {
 	for _, tag := range post.Tags {
 		tags = append(tags, tag.Name)
 	}
-	return PostSummaryDTO{ID: post.ID, Author: toUserDTO(post.Author), Title: post.Title, Slug: post.Slug, Summary: post.Summary, CoverImage: post.CoverImage, Tags: tags, Status: post.Status, ModerationStatus: post.ModerationStatus, Category: toCategoryDTO(post.Category), Featured: post.Featured, Views: post.Views, LikesCount: post.LikesCount, FavoriteCount: post.FavoriteCount, CommentsCount: post.CommentsCount, ReadingTime: post.ReadingTime, PublishedAt: post.PublishedAt, CreatedAt: post.CreatedAt, UpdatedAt: post.UpdatedAt}
+	return PostSummaryDTO{ID: post.ID, Author: toUserDTO(post.Author), Title: post.Title, Slug: post.Slug, Summary: post.Summary, CoverImage: post.CoverImage, Tags: tags, Status: post.Status, ModerationStatus: post.ModerationStatus, Category: toCategoryDTO(post.Category), Featured: post.Featured, Views: post.Views, LikesCount: post.LikesCount, FavoriteCount: post.FavoriteCount, CommentsCount: post.CommentsCount, ReadingTime: post.ReadingTime, PublishedAt: post.PublishedAt, ScheduledAt: post.ScheduledAt, CreatedAt: post.CreatedAt, UpdatedAt: post.UpdatedAt}
 }
 
 func toCategoryDTO(category *models.Category) *CategoryDTO {

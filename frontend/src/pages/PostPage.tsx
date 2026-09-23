@@ -1,13 +1,13 @@
 import { ArrowLeft, ArrowRight, Bookmark, CalendarDays, Clock3, Eye, Flag, Heart, MessageCircle, Pencil, Share2, UserPlus, UserRoundCheck, Trash2 } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
-import { useEffect, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { useEffect, useMemo, useState } from 'react'
 import { createComment, createReport, deleteComment, favoritePost, followUser, getComments, getCurrentUser, getPostBySlug, getUserProfile, likeComment, likePost, recordPostView, unfavoritePost, unfollowUser, unlikeComment, unlikePost, type AdjacentPost, type AuthUser } from '../services/api'
 import { CoverImage } from '../components/CoverImage'
 import { ConfirmDialog, NoticeDialog, PromptDialog } from '../components/Dialog'
+import { MarkdownContent } from '../components/MarkdownContent'
 import type { Comment, Post } from '../types'
 import { formatDate } from '../utils'
+import { extractMarkdownHeadings } from '../utils/markdown'
 
 // 评论树节点：顶层评论 + 挂在其下的回复（方案要求评论最多两层）
 type CommentNode = { comment: Comment; replies: Comment[] }
@@ -52,6 +52,8 @@ export function PostPage() {
   const [reportReason, setReportReason] = useState('')
   const [notice, setNotice] = useState<{ title: string; message: string }>()
   const [deleteRequest, setDeleteRequest] = useState<Comment>()
+  const [readProgress, setReadProgress] = useState(0)
+  const headings = useMemo(() => extractMarkdownHeadings(post?.content ?? ''), [post?.content])
 
   useEffect(() => {
     if (!slug) return
@@ -86,6 +88,20 @@ export function PostPage() {
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [slug])
+
+  useEffect(() => {
+    const updateProgress = () => {
+      const available = document.documentElement.scrollHeight - window.innerHeight
+      setReadProgress(available > 0 ? Math.min(100, Math.max(0, (window.scrollY / available) * 100)) : 0)
+    }
+    updateProgress()
+    window.addEventListener('scroll', updateProgress, { passive: true })
+    window.addEventListener('resize', updateProgress)
+    return () => {
+      window.removeEventListener('scroll', updateProgress)
+      window.removeEventListener('resize', updateProgress)
+    }
+  }, [post?.id])
 
   const toggleLike = async () => {
     if (!post || !user) return
@@ -215,6 +231,7 @@ export function PostPage() {
 
   return (
     <>
+      <div className="reading-progress" aria-hidden="true"><span style={{ width: `${readProgress}%` }} /></div>
       <article className="article-page">
       <header className="article-header container">
         <Link className="back-link" to="/posts"><ArrowLeft size={15} /> 返回文章列表</Link>
@@ -226,8 +243,8 @@ export function PostPage() {
       </header>
       <div className="article-hero container"><CoverImage src={post.coverImage} title={post.title} /></div>
       <div className="article-body-wrap container">
-        <aside className="article-aside"><div className="aside-label">On this page</div><a href="#article-content">正文内容</a><a href="#article-end">继续阅读</a></aside>
-        <div className="article-content" id="article-content"><ReactMarkdown remarkPlugins={[remarkGfm]}>{post.content}</ReactMarkdown><div id="article-end" /></div>
+        <aside className="article-aside"><div className="aside-label">On this page</div>{headings.length ? headings.map((heading) => <a className={`toc-level-${heading.level}`} href={`#${heading.id}`} key={heading.id}>{heading.text}</a>) : <a href="#article-content">正文内容</a>}</aside>
+        <div id="article-content"><MarkdownContent className="article-content" content={post.content} /><div id="article-end" /></div>
       </div>
       <div className="container article-nav">
         {previous ? <Link to={`/posts/${previous.slug}`} className="article-nav-item"><span><ArrowLeft size={15} /> 上一篇</span><strong>{previous.title}</strong></Link> : <span />}

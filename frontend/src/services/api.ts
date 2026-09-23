@@ -1,4 +1,4 @@
-import type { AdminComment, AdminLogEntry, AdminReport, Category, Comment, NotificationItem, Post, PostStatus, PostSummary, TagUsage, UserSummary } from '../types'
+import type { AdminComment, AdminLogEntry, AdminReport, Category, Comment, NotificationItem, Post, PostRevision, PostStatus, PostSummary, TagUsage, UserSummary } from '../types'
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '/api'
 
@@ -7,7 +7,7 @@ type ApiPayload<T> = { code: number; message: string; data: T }
 export type AuthUser = UserSummary & { role: string; status: string }
 export type Tag = { id: number; name: string; slug: string }
 export type PostPage = { items: PostSummary[]; total: number; page: number; pageSize: number }
-export type PostInput = Pick<Post, 'title' | 'summary' | 'content' | 'coverImage' | 'tags' | 'status' | 'featured'> & { slug?: string; categoryId?: number | null }
+export type PostInput = Pick<Post, 'title' | 'summary' | 'content' | 'coverImage' | 'tags' | 'status' | 'featured'> & { slug?: string; categoryId?: number | null; scheduledAt?: string | null }
 export type AdjacentPost = Pick<PostSummary, 'title' | 'slug'>
 export type PostDetail = { post: Post; previous: AdjacentPost | null; next: AdjacentPost | null }
 export type AdminStats = { total: number; users: number; posts: number; published: number; views: number; likes: number; comments: number; follows: number; todayUsers: number; todayPosts: number; todayComments: number; activeUsers: { user: UserSummary; postCount: number; commentCount: number }[] }
@@ -57,7 +57,7 @@ async function request<T>(path: string, options?: RequestOptions): Promise<T> {
   return payload.data
 }
 
-export function getPosts(params: { q?: string; tag?: string; page?: number; pageSize?: number } = {}, admin = false) {
+export function getPosts(params: { q?: string; tag?: string; category?: string; page?: number; pageSize?: number } = {}, admin = false) {
   const query = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => { if (value) query.set(key, String(value)) })
   return request<PostPage>(`${admin ? '/admin' : ''}/posts${query.size ? `?${query}` : ''}`)
@@ -99,7 +99,7 @@ export function updatePassword(input: { currentPassword: string; newPassword: st
   return request<void>('/me/password', { method: 'PATCH', body: JSON.stringify(input) })
 }
 
-export function getFeed(params: { mode?: string; q?: string; tag?: string; page?: number; pageSize?: number } = {}) {
+export function getFeed(params: { mode?: string; q?: string; tag?: string; category?: string; page?: number; pageSize?: number } = {}) {
   const query = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => { if (value) query.set(key, String(value)) })
   return request<FeedPage>(`/feed${query.size ? `?${query}` : ''}`)
@@ -187,8 +187,22 @@ export function getPostById(id: number) {
   return request<Post>(`/posts/id/${id}`)
 }
 
+export function getPostRevisions(id: number) {
+  return request<PostRevision[]>(`/posts/id/${id}/revisions`)
+}
+
+export function restorePostRevision(id: number, revisionId: number) {
+  return request<Post>(`/posts/id/${id}/revisions/${revisionId}/restore`, { method: 'POST' })
+}
+
 export function getCategories() {
   return request<Category[]>('/categories')
+}
+
+export async function uploadImage(file: File) {
+  const body = new FormData()
+  body.append('file', file)
+  return request<{ url: string }>('/uploads/images', { method: 'POST', body })
 }
 
 export function likePost(slug: string) {
@@ -229,8 +243,8 @@ export function deletePost(id: number) {
   return request<void>(`/admin/posts/${id}`, { method: 'DELETE' })
 }
 
-export function updatePostStatus(id: number, status: PostStatus) {
-  return request<void>(`/admin/posts/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) })
+export function updatePostStatus(id: number, status: PostStatus, scheduledAt?: string | null) {
+  return request<void>(`/admin/posts/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status, scheduledAt }) })
 }
 
 export function updatePostModeration(id: number, status: 'normal' | 'hidden') {

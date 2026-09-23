@@ -1,4 +1,4 @@
-export type PostStatus = 'draft' | 'published' | 'archived'
+export type PostStatus = 'draft' | 'scheduled' | 'published' | 'archived'
 
 export type Category = { id: number; name: string; slug: string }
 
@@ -21,6 +21,7 @@ export type PostSummary = {
   liked: boolean
   favorited?: boolean
   publishedAt: string
+  scheduledAt?: string | null
   readingTime: number
   createdAt?: string
   updatedAt?: string
@@ -28,6 +29,19 @@ export type PostSummary = {
 
 export type Post = PostSummary & {
   content: string
+}
+
+export type PostRevision = {
+  id: number
+  title: string
+  slug: string
+  summary: string
+  content: string
+  coverImage: string
+  categoryId: number | null
+  featured: boolean
+  tags: string[]
+  createdAt: string
 }
 
 export type UserSummary = {

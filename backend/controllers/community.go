@@ -79,6 +79,9 @@ func (cc *CommunityController) Feed(c *gin.Context) {
 	if tag := strings.TrimSpace(c.Query("tag")); tag != "" {
 		query = query.Where("EXISTS (SELECT 1 FROM post_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.post_id = posts.id AND (t.name = ? OR t.slug = ?))", tag, tag)
 	}
+	if category := strings.TrimSpace(c.Query("category")); category != "" {
+		query = query.Where("EXISTS (SELECT 1 FROM categories cat WHERE cat.id = posts.category_id AND (cat.name = ? OR cat.slug = ?))", category, category)
+	}
 	mode := strings.TrimSpace(c.DefaultQuery("mode", "latest"))
 	if mode == "following" {
 		userID := currentUserID(c)
@@ -125,9 +128,10 @@ func (cc *CommunityController) CreatePost(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "标题和正文不能为空"})
 		return
 	}
-	status := strings.TrimSpace(input.Status)
-	if status != "published" {
-		status = "draft"
+	status, ok := normalizeStatus(input.Status)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "文章状态无效"})
+		return
 	}
 	validCategory, err := resolveCategory(cc.DB, input.CategoryID)
 	if err != nil {
@@ -143,8 +147,9 @@ func (cc *CommunityController) CreatePost(c *gin.Context) {
 		slug = input.Title
 	}
 	post := models.Post{AuthorID: userID, Title: strings.TrimSpace(input.Title), Summary: strings.TrimSpace(input.Summary), Content: input.Content, CoverImage: strings.TrimSpace(input.CoverImage), Status: status, ReadingTime: readingTime(input.Content), CategoryID: input.CategoryID}
-	if status == "published" {
-		post.PublishedAt = time.Now()
+	if err := applyPostTiming(&post, status, input.ScheduledAt); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		return
 	}
 	if err := savePostWithSlugRetry(cc.DB, slugify(slug), &post, func(tx *gorm.DB) error {
 		if err := tx.Create(&post).Error; err != nil {
@@ -186,9 +191,10 @@ func (cc *CommunityController) UpdatePost(c *gin.Context) {
 		return
 	}
 	wasPublished := post.Status == "published"
-	status := strings.TrimSpace(input.Status)
-	if status != "published" && status != "archived" {
-		status = "draft"
+	status, ok := normalizeStatus(input.Status)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "文章状态无效"})
+		return
 	}
 	validCategory, err := resolveCategory(cc.DB, input.CategoryID)
 	if err != nil {
@@ -199,6 +205,7 @@ func (cc *CommunityController) UpdatePost(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "分类不存在"})
 		return
 	}
+	original := post
 	slug := input.Slug
 	if slug == "" {
 		slug = post.Slug
@@ -210,10 +217,14 @@ func (cc *CommunityController) UpdatePost(c *gin.Context) {
 	post.Status = status
 	post.ReadingTime = readingTime(input.Content)
 	post.CategoryID = input.CategoryID
-	if status == "published" && post.PublishedAt.IsZero() {
-		post.PublishedAt = time.Now()
+	if err := applyPostTiming(&post, status, input.ScheduledAt); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
+		return
 	}
 	if err := savePostWithSlugRetry(cc.DB, slugify(slug), &post, func(tx *gorm.DB) error {
+		if err := savePostRevision(tx, original, userID); err != nil {
+			return err
+		}
 		if err := tx.Save(&post).Error; err != nil {
 			return err
 		}

@@ -2,6 +2,7 @@ import { UploadCloud, X } from 'lucide-react'
 import type { Dispatch, FormEvent, SetStateAction } from 'react'
 import type { PostInput } from '../../services/api'
 import type { PostStatus, TagUsage } from '../../types'
+import { ImageUploadField } from '../../components/ImageUploadField'
 
 type AdminPostEditorProps = {
   editingID?: number
@@ -36,10 +37,11 @@ export function AdminPostEditor({ editingID, editorLoading, saving, error, draft
           <label>摘要<textarea value={draft.summary} onChange={(event) => setDraft({ ...draft, summary: event.target.value })} placeholder="用一句话说明这篇文章" /></label>
           <div className="editor-grid">
             <label>标签<input value={draft.tags.join(', ')} onChange={(event) => setDraft({ ...draft, tags: event.target.value.split(',').map((tag) => tag.trim()).filter(Boolean) })} placeholder="React, Go" /></label>
-            {editingID && <label>状态<select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as PostStatus })}><option value="draft">草稿</option><option value="published">已发布</option><option value="archived">已归档</option></select></label>}
+            {editingID && <label>状态<select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as PostStatus })}><option value="draft">草稿</option><option value="scheduled">待发布</option><option value="published">已发布</option><option value="archived">已归档</option></select></label>}
             <label>分类<select value={draft.categoryId ?? ''} onChange={(event) => setDraft({ ...draft, categoryId: event.target.value ? Number(event.target.value) : null })}><option value="">不设分类</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
           </div>
-          <label>封面地址<input value={draft.coverImage} onChange={(event) => setDraft({ ...draft, coverImage: event.target.value })} placeholder="https://..." /></label>
+          <label>封面图片<ImageUploadField value={draft.coverImage} onChange={(coverImage) => setDraft({ ...draft, coverImage })} /></label>
+          <label>计划发布时间<input type="datetime-local" value={draft.scheduledAt ? new Date(new Date(draft.scheduledAt).getTime() - new Date(draft.scheduledAt).getTimezoneOffset() * 60_000).toISOString().slice(0, 16) : ''} onChange={(event) => setDraft({ ...draft, scheduledAt: event.target.value ? new Date(event.target.value).toISOString() : null })} /></label>
           <label className="checkbox-field"><input type="checkbox" checked={draft.featured} onChange={(event) => setDraft({ ...draft, featured: event.target.checked })} />设为精选文章</label>
           <label>正文<textarea required className="editor-textarea" value={draft.content} onChange={(event) => setDraft({ ...draft, content: event.target.value })} placeholder="支持 Markdown" /></label>
           <div className="editor-actions">

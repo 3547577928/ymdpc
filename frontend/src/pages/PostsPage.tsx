@@ -3,8 +3,8 @@ import { Link } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { PostCard } from '../components/PostCard'
-import { getFeed, getTags } from '../services/api'
-import type { PostSummary } from '../types'
+import { getCategories, getFeed, getTags } from '../services/api'
+import type { Category, PostSummary } from '../types'
 import { formatDate } from '../utils'
 
 export function PostsPage() {
@@ -18,10 +18,12 @@ export function PostsPage() {
   const [posts, setPosts] = useState<PostSummary[]>([])
   const [rankingPosts, setRankingPosts] = useState<PostSummary[]>([])
   const [allTags, setAllTags] = useState<string[]>([])
+  const [categories, setCategories] = useState<Category[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const selectedTag = params.get('tag') ?? '全部'
+  const selectedCategory = params.get('category') ?? '全部'
 
   useEffect(() => {
     setQueryInput(query)
@@ -40,7 +42,10 @@ export function PostsPage() {
   }, [params, query, queryInput, setParams])
 
   useEffect(() => {
-    getTags().then((tags) => setAllTags(tags.map((tag) => tag.name))).catch((reason: Error) => setError(reason.message))
+    Promise.all([getTags(), getCategories()]).then(([tags, categoryItems]) => {
+      setAllTags(tags.map((tag) => tag.name))
+      setCategories(categoryItems)
+    }).catch((reason: Error) => setError(reason.message))
     getFeed({ mode: 'hot', pageSize: 5 }).then((data) => setRankingPosts(data.items)).catch(() => setRankingPosts([]))
   }, [])
 
@@ -48,7 +53,7 @@ export function PostsPage() {
     let active = true
     setLoading(true)
     setError('')
-    getFeed({ mode, q: query, tag: selectedTag === '全部' ? undefined : selectedTag, page, pageSize }).then((postPage) => {
+    getFeed({ mode, q: query, tag: selectedTag === '全部' ? undefined : selectedTag, category: selectedCategory === '全部' ? undefined : selectedCategory, page, pageSize }).then((postPage) => {
       if (!active) return
       setPosts(postPage.items)
       setTotal(postPage.total)
@@ -58,12 +63,20 @@ export function PostsPage() {
       if (active) setLoading(false)
     })
     return () => { active = false }
-  }, [mode, page, query, selectedTag])
+  }, [mode, page, query, selectedCategory, selectedTag])
 
   const changeTag = (tag: string) => {
     const next = new URLSearchParams(params)
     if (tag === '全部') next.delete('tag')
     else next.set('tag', tag)
+    next.delete('page')
+    setParams(next)
+  }
+
+  const changeCategory = (category: string) => {
+    const next = new URLSearchParams(params)
+    if (category === '全部') next.delete('category')
+    else next.set('category', category)
     next.delete('page')
     setParams(next)
   }
@@ -99,10 +112,14 @@ export function PostsPage() {
         <label className="search-box"><Search size={17} /><input value={queryInput} onChange={(event) => setQueryInput(event.target.value)} placeholder="搜索标题或关键词" /></label>
         <div className="feed-tabs"><Link className={mode === 'latest' ? 'is-active' : ''} to={`/posts?${new URLSearchParams({ ...Object.fromEntries(params), mode: 'latest' })}`}>最新</Link><Link className={mode === 'hot' ? 'is-active' : ''} to={`/posts?${new URLSearchParams({ ...Object.fromEntries(params), mode: 'hot' })}`}>热门</Link>{mode === 'following' && <Link className="is-active" to="/posts?mode=following">关注</Link>}</div>
       </div>
-      <div className="toolbar-label"><SlidersHorizontal size={15} /> 筛选主题</div>
+      <div className="toolbar-label"><SlidersHorizontal size={15} /> 分类</div>
+      <div className="filter-row filter-row-compact">
+        {['全部', ...categories.map((category) => category.name)].map((category) => <button key={category} className={`filter-chip ${selectedCategory === category ? 'is-active' : ''}`} onClick={() => changeCategory(category)}>{category}</button>)}
+      </div>
+      <div className="toolbar-label"><SlidersHorizontal size={15} /> 标签</div>
       <div className="filter-row">
         {['全部', ...allTags].map((tag) => <button key={tag} className={`filter-chip ${selectedTag === tag ? 'is-active' : ''}`} onClick={() => changeTag(tag)}>{tag}</button>)}
-        {(queryInput || selectedTag !== '全部') && <button className="clear-filter" onClick={() => { setQueryInput(''); setParams({}) }}><X size={14} /> 清除筛选</button>}
+        {(queryInput || selectedTag !== '全部' || selectedCategory !== '全部') && <button className="clear-filter" onClick={() => { setQueryInput(''); setParams({}) }}><X size={14} /> 清除筛选</button>}
       </div>
 
       <div className="community-content">

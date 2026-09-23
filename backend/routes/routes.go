@@ -16,6 +16,7 @@ type Dependencies struct {
 	Interactions *controllers.InteractionController
 	Tags         *controllers.TagController
 	Auth         *controllers.AuthController
+	Uploads      *controllers.UploadController
 	Secret       string
 	// DB 供管理端中间件复核角色与账号状态，见 middleware.RequireAdmin
 	DB *gorm.DB
@@ -39,6 +40,7 @@ func Register(r *gin.Engine, deps Dependencies) {
 	api.GET("/notifications", middleware.RequireAuth(deps.Secret, deps.DB), deps.Interactions.Notifications)
 	api.PATCH("/notifications/:id/read", middleware.RequireAuth(deps.Secret, deps.DB), deps.Interactions.MarkNotificationRead)
 	api.POST("/reports", writeLimit, middleware.RequireAuth(deps.Secret, deps.DB), deps.Interactions.CreateReport)
+	api.POST("/uploads/images", writeLimit, middleware.RequireAuth(deps.Secret, deps.DB), deps.Uploads.Image)
 	api.GET("/categories", deps.Interactions.ListCategories)
 	api.GET("/feed", middleware.OptionalAuth(deps.Secret, deps.DB), deps.Community.Feed)
 	api.GET("/users/:username", middleware.OptionalAuth(deps.Secret, deps.DB), deps.Community.Profile)
@@ -47,6 +49,8 @@ func Register(r *gin.Engine, deps Dependencies) {
 	api.GET("/posts", middleware.OptionalAuth(deps.Secret, deps.DB), deps.Posts.List)
 	api.POST("/posts", writeLimit, middleware.RequireAuth(deps.Secret, deps.DB), deps.Community.CreatePost)
 	api.GET("/posts/id/:id", middleware.RequireAuth(deps.Secret, deps.DB), deps.Interactions.OwnerPostDetail)
+	api.GET("/posts/id/:id/revisions", middleware.RequireAuth(deps.Secret, deps.DB), deps.Community.PostRevisions)
+	api.POST("/posts/id/:id/revisions/:revisionId/restore", writeLimit, middleware.RequireAuth(deps.Secret, deps.DB), deps.Community.RestorePostRevision)
 	api.PUT("/posts/id/:id", writeLimit, middleware.RequireAuth(deps.Secret, deps.DB), deps.Community.UpdatePost)
 	api.DELETE("/posts/id/:id", writeLimit, middleware.RequireAuth(deps.Secret, deps.DB), deps.Community.DeletePost)
 	api.GET("/posts/:slug", middleware.OptionalAuth(deps.Secret, deps.DB), deps.Posts.Detail)

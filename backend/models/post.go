@@ -13,19 +13,20 @@ type Post struct {
 	CoverImage string `json:"coverImage" gorm:"size:500"`
 	Status     string `json:"status" gorm:"size:20;index;not null;default:published"`
 	// ModerationStatus 管理员审核状态：normal 正常，hidden 下架隐藏
-	ModerationStatus string    `json:"moderationStatus" gorm:"size:20;index;not null;default:normal"`
-	CategoryID       *uint     `json:"categoryId" gorm:"index"`
-	Category         *Category `json:"category" gorm:"foreignKey:CategoryID"`
-	Featured         bool      `json:"featured"`
-	Views            int       `json:"views"`
-	LikesCount       int       `json:"likesCount"`
-	FavoriteCount    int       `json:"favoriteCount"`
-	CommentsCount    int       `json:"commentsCount"`
-	ReadingTime      int       `json:"readingTime"`
-	PublishedAt      time.Time `json:"publishedAt"`
-	CreatedAt        time.Time `json:"createdAt"`
-	UpdatedAt        time.Time `json:"updatedAt"`
-	Tags             []Tag     `json:"tags" gorm:"many2many:post_tags;"`
+	ModerationStatus string     `json:"moderationStatus" gorm:"size:20;index;not null;default:normal"`
+	CategoryID       *uint      `json:"categoryId" gorm:"index"`
+	Category         *Category  `json:"category" gorm:"foreignKey:CategoryID"`
+	Featured         bool       `json:"featured"`
+	Views            int        `json:"views"`
+	LikesCount       int        `json:"likesCount"`
+	FavoriteCount    int        `json:"favoriteCount"`
+	CommentsCount    int        `json:"commentsCount"`
+	ReadingTime      int        `json:"readingTime"`
+	PublishedAt      time.Time  `json:"publishedAt"`
+	ScheduledAt      *time.Time `json:"scheduledAt" gorm:"index"`
+	CreatedAt        time.Time  `json:"createdAt"`
+	UpdatedAt        time.Time  `json:"updatedAt"`
+	Tags             []Tag      `json:"tags" gorm:"many2many:post_tags;"`
 }
 
 type Tag struct {

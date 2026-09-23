@@ -34,6 +34,9 @@ func main() {
 	if err := os.MkdirAll(filepath.Dir(cfg.DatabasePath), 0o755); err != nil {
 		log.Fatalf("create database directory: %v", err)
 	}
+	if err := os.MkdirAll(cfg.UploadDir, 0o755); err != nil {
+		log.Fatalf("create upload directory: %v", err)
+	}
 	separator := "?"
 	if strings.Contains(cfg.DatabasePath, "?") {
 		separator = "&"
@@ -46,7 +49,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("connect database: %v", err)
 	}
-	if err := migrateDB.AutoMigrate(&models.User{}, &models.Post{}, &models.Tag{}, &models.Comment{}, &models.PostLike{}, &models.Follow{}, &models.Category{}, &models.Favorite{}, &models.CommentLike{}, &models.Notification{}, &models.Report{}, &models.AdminLog{}, &models.Setting{}); err != nil {
+	if err := migrateDB.AutoMigrate(&models.User{}, &models.Post{}, &models.Tag{}, &models.Comment{}, &models.PostLike{}, &models.Follow{}, &models.Category{}, &models.Favorite{}, &models.CommentLike{}, &models.Notification{}, &models.Report{}, &models.AdminLog{}, &models.Setting{}, &models.PostRevision{}); err != nil {
 		log.Fatalf("migrate database: %v", err)
 	}
 	if err := models.EnsureIndexes(migrateDB); err != nil {
@@ -64,10 +67,17 @@ func main() {
 	if err := models.Seed(db, cfg.AdminUsername, cfg.AdminPassword); err != nil {
 		log.Fatalf("seed database: %v", err)
 	}
+	if err := controllers.PublishScheduledPosts(db, time.Now()); err != nil {
+		log.Printf("publish scheduled posts: %v", err)
+	}
+	schedulerCtx, stopScheduler := context.WithCancel(context.Background())
+	defer stopScheduler()
+	go controllers.RunScheduledPublisher(schedulerCtx, db)
 
 	r := gin.New()
+	r.Static("/uploads", cfg.UploadDir)
 	r.Use(gin.Logger(), gin.Recovery(), cors.New(corsConfig(cfg.AllowedOrigins, gin.Mode() != gin.ReleaseMode)))
-	routes.Register(r, routes.Dependencies{Posts: &controllers.PostController{DB: db}, Community: &controllers.CommunityController{DB: db}, Interactions: &controllers.InteractionController{DB: db}, Tags: &controllers.TagController{DB: db}, Auth: &controllers.AuthController{DB: db, Secret: cfg.JWTSecret, CookieSecure: cfg.CookieSecure}, Secret: cfg.JWTSecret, DB: db})
+	routes.Register(r, routes.Dependencies{Posts: &controllers.PostController{DB: db}, Community: &controllers.CommunityController{DB: db}, Interactions: &controllers.InteractionController{DB: db}, Tags: &controllers.TagController{DB: db}, Auth: &controllers.AuthController{DB: db, Secret: cfg.JWTSecret, CookieSecure: cfg.CookieSecure}, Uploads: &controllers.UploadController{Dir: cfg.UploadDir}, Secret: cfg.JWTSecret, DB: db})
 
 	log.Printf("quiet signal api listening on :%s", cfg.Port)
 	server := &http.Server{
@@ -87,6 +97,7 @@ func main() {
 	shutdownSignal := make(chan os.Signal, 1)
 	signal.Notify(shutdownSignal, syscall.SIGINT, syscall.SIGTERM)
 	<-shutdownSignal
+	stopScheduler()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {

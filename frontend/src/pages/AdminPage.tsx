@@ -10,7 +10,7 @@ import { AdminPostEditor } from './admin/AdminPostEditor'
 import { AdminSidebar } from './admin/AdminSidebar'
 import { useAdminData } from './admin/useAdminData'
 
-const emptyDraft: PostInput = { title: '', slug: '', summary: '', content: '', coverImage: '', tags: [], status: 'draft', featured: false }
+const emptyDraft: PostInput = { title: '', slug: '', summary: '', content: '', coverImage: '', tags: [], status: 'draft', featured: false, scheduledAt: null }
 const pageSize = 20
 type ConfirmRequest = { title: string; message: string; action: () => Promise<void> }
 
@@ -63,7 +63,7 @@ export function AdminPage() {
     setError('')
     try {
       const detail = await getAdminPost(post.id)
-      setDraft({ title: detail.title, slug: detail.slug, summary: detail.summary, content: detail.content, coverImage: detail.coverImage, tags: detail.tags, status: detail.status, featured: detail.featured, categoryId: detail.category?.id ?? null })
+      setDraft({ title: detail.title, slug: detail.slug, summary: detail.summary, content: detail.content, coverImage: detail.coverImage, tags: detail.tags, status: detail.status, featured: detail.featured, categoryId: detail.category?.id ?? null, scheduledAt: detail.scheduledAt ?? null })
     } catch (reason) {
       setShowEditor(false)
       setError(reason instanceof Error ? reason.message : '读取文章失败')

@@ -12,7 +12,7 @@ func TestEnsureIndexes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&User{}, &Post{}, &Tag{}, &Comment{}, &PostLike{}, &Follow{}, &Category{}, &Favorite{}, &CommentLike{}, &Notification{}, &Report{}, &AdminLog{}, &Setting{}); err != nil {
+	if err := db.AutoMigrate(&User{}, &Post{}, &Tag{}, &Comment{}, &PostLike{}, &Follow{}, &Category{}, &Favorite{}, &CommentLike{}, &Notification{}, &Report{}, &AdminLog{}, &Setting{}, &PostRevision{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := EnsureIndexes(db); err != nil {

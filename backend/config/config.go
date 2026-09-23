@@ -15,6 +15,7 @@ const (
 type Config struct {
 	Port           string
 	DatabasePath   string
+	UploadDir      string
 	JWTSecret      string
 	AllowedOrigins string
 	AdminUsername  string
@@ -31,6 +32,7 @@ func Load() Config {
 	return Config{
 		Port:           port,
 		DatabasePath:   envOr("DATABASE_PATH", "./data/quietsig.db"),
+		UploadDir:      envOr("UPLOAD_DIR", "./data/uploads"),
 		JWTSecret:      envOr("JWT_SECRET", defaultJWTSecret),
 		AllowedOrigins: envOr("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"),
 		AdminUsername:  envOr("ADMIN_USERNAME", "admin"),

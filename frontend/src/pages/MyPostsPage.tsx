@@ -9,11 +9,12 @@ import { formatDate } from '../utils'
 const tabs: { key: string; label: string }[] = [
   { key: '', label: '全部' },
   { key: 'published', label: '已发布' },
+  { key: 'scheduled', label: '待发布' },
   { key: 'draft', label: '草稿' },
   { key: 'archived', label: '归档' },
 ]
 
-const statusLabels: Record<PostStatus, string> = { draft: '草稿', published: '已发布', archived: '已归档' }
+const statusLabels: Record<PostStatus, string> = { draft: '草稿', scheduled: '待发布', published: '已发布', archived: '已归档' }
 
 // 我的文章与草稿管理页，作者可以编辑或删除自己的任何状态文章
 export function MyPostsPage() {

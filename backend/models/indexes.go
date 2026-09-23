@@ -7,6 +7,7 @@ import "gorm.io/gorm"
 func EnsureIndexes(db *gorm.DB) error {
 	statements := []string{
 		`CREATE INDEX IF NOT EXISTS idx_posts_public_order ON posts(status, moderation_status, published_at, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_posts_scheduled_publish ON posts(status, scheduled_at, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_comments_post_status_created ON comments(post_id, status, created_at, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_notifications_user_read_created ON notifications(user_id, read_at, created_at, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_follows_following_follower ON follows(following_id, follower_id)`,

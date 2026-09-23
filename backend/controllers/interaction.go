@@ -80,6 +80,9 @@ func writeAdminLog(db *gorm.DB, adminID uint, action, targetType string, targetI
 
 // deletePostRelations 删除文章时清理关联数据：评论点赞、回复通知、评论、文章点赞、收藏与站内通知
 func deletePostRelations(tx *gorm.DB, postID uint) error {
+	if err := tx.Where("post_id = ?", postID).Delete(&models.PostRevision{}).Error; err != nil {
+		return err
+	}
 	// 顺序敏感：reply 通知的资源 id 指向评论，必须在删除评论之前清理，
 	// 否则评论已经不存在，这里的子查询永远查不到行，通知会残留在数据库里
 	if err := tx.Where("comment_id IN (SELECT id FROM comments WHERE post_id = ?)", postID).Delete(&models.CommentLike{}).Error; err != nil {
@@ -171,7 +174,7 @@ func (ic *InteractionController) MyPosts(c *gin.Context) {
 	page, pageSize := pagination(c)
 	query := ic.DB.Model(&models.Post{}).Where("author_id = ?", userID)
 	switch strings.TrimSpace(c.Query("status")) {
-	case "published", "draft", "archived":
+	case "published", "scheduled", "draft", "archived":
 		query = query.Where("status = ?", strings.TrimSpace(c.Query("status")))
 	}
 	if keyword := strings.TrimSpace(c.Query("q")); keyword != "" {

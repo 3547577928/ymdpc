@@ -23,7 +23,7 @@ func newCommunityTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.Tag{}, &models.Comment{}, &models.PostLike{}, &models.Follow{}, &models.Category{}, &models.Favorite{}, &models.CommentLike{}, &models.Notification{}, &models.Report{}, &models.AdminLog{}, &models.Setting{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.Post{}, &models.Tag{}, &models.Comment{}, &models.PostLike{}, &models.Follow{}, &models.Category{}, &models.Favorite{}, &models.CommentLike{}, &models.Notification{}, &models.Report{}, &models.AdminLog{}, &models.Setting{}, &models.PostRevision{}); err != nil {
 		t.Fatal(err)
 	}
 	return db
@@ -406,5 +406,55 @@ func TestDeleteCommentRemovesDescendantsAndRebuildsCount(t *testing.T) {
 	}
 	if storedPost.CommentsCount != 0 {
 		t.Fatalf("expected rebuilt comments count 0, got %d", storedPost.CommentsCount)
+	}
+}
+
+func TestPostRevisionHistoryAndRestore(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newCommunityTestDB(t)
+	user := models.User{Username: "author", Nickname: "Author", Role: "user", Status: "active"}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	post := models.Post{AuthorID: user.ID, Title: "Version one", Slug: "version-one", Summary: "first", Content: "# First", Status: "draft", ReadingTime: 1}
+	if err := db.Create(&post).Error; err != nil {
+		t.Fatal(err)
+	}
+	community := &CommunityController{DB: db}
+	params := gin.Params{{Key: "id", Value: fmt.Sprint(post.ID)}}
+
+	update := authenticatedRequest(community.UpdatePost, http.MethodPut, "/api/posts/id/1", `{"title":"Version two","slug":"version-two","summary":"second","content":"# Second","status":"draft","tags":["Go"]}`, params, user.ID, "user")
+	if update.Code != http.StatusOK {
+		t.Fatalf("update returned %d: %s", update.Code, update.Body.String())
+	}
+	var revision models.PostRevision
+	if err := db.Where("post_id = ?", post.ID).First(&revision).Error; err != nil {
+		t.Fatal(err)
+	}
+	if revision.Title != "Version one" || revision.Content != "# First" {
+		t.Fatalf("unexpected revision snapshot: %#v", revision)
+	}
+
+	list := authenticatedRequest(community.PostRevisions, http.MethodGet, "/api/posts/id/1/revisions", "", params, user.ID, "user")
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), "Version one") {
+		t.Fatalf("unexpected revisions response: %d %s", list.Code, list.Body.String())
+	}
+	restoreParams := gin.Params{{Key: "id", Value: fmt.Sprint(post.ID)}, {Key: "revisionId", Value: fmt.Sprint(revision.ID)}}
+	restore := authenticatedRequest(community.RestorePostRevision, http.MethodPost, "/api/posts/id/1/revisions/1/restore", "", restoreParams, user.ID, "user")
+	if restore.Code != http.StatusOK {
+		t.Fatalf("restore returned %d: %s", restore.Code, restore.Body.String())
+	}
+	if err := db.First(&post, post.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if post.Title != "Version one" || post.Content != "# First" {
+		t.Fatalf("post was not restored: %#v", post)
+	}
+	var revisionCount int64
+	if err := db.Model(&models.PostRevision{}).Where("post_id = ?", post.ID).Count(&revisionCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if revisionCount != 2 {
+		t.Fatalf("expected current content to be snapshotted before restore, got %d revisions", revisionCount)
 	}
 }
