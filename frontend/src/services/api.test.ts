@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AUTH_EXPIRED_EVENT, getCurrentUser, getPosts } from './api'
+import { AUTH_EXPIRED_EVENT, getCurrentUser, getPosts, uploadImage } from './api'
 
 function mockResponse(status: number, payload: unknown): Response {
   return { ok: status >= 200 && status < 300, status, json: async () => payload } as Response
@@ -32,5 +32,16 @@ describe('api session handling', () => {
 
     expect(onExpired).not.toHaveBeenCalled()
     window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired)
+  })
+
+  it('keeps FormData uploads as multipart requests', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse(201, { code: 0, message: 'success', data: { url: '/uploads/test.png' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await uploadImage(new File(['image'], 'test.png', { type: 'image/png' }))
+
+    const [, request] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(request.headers).not.toHaveProperty('Content-Type', 'application/json')
+    expect(request.body).toBeInstanceOf(FormData)
   })
 })

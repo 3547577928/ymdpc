@@ -6,6 +6,7 @@ services:
       GIN_MODE: release
       PORT: 8080
       DATABASE_PATH: /data/quietsig.db
+      UPLOAD_DIR: /data/uploads
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}

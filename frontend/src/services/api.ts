@@ -30,7 +30,11 @@ function notifyAuthExpired() {
 async function request<T>(path: string, options?: RequestOptions): Promise<T> {
   const { suppressAuthExpired = false, ...fetchOptions } = options ?? {}
   const headers = new Headers(fetchOptions.headers)
-  if (fetchOptions.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+  // FormData needs the browser-generated multipart boundary; setting JSON here
+  // makes Gin unable to parse the uploaded file from the request body.
+  if (fetchOptions.body && !(fetchOptions.body instanceof FormData) && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json')
+  }
   let response: Response
   try {
     response = await fetch(`${API_BASE}${path}`, {
