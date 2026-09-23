@@ -27,8 +27,8 @@ func (cc *CommunityController) AdminUsers(c *gin.Context) {
 	page, pageSize := pagination(c)
 	query := cc.DB.Model(&models.User{})
 	if keyword := strings.TrimSpace(c.Query("q")); keyword != "" {
-		like := "%" + keyword + "%"
-		query = query.Where("username LIKE ? OR nickname LIKE ?", like, like)
+		like := likePattern(keyword)
+		query = query.Where("username LIKE ? ESCAPE '\\' OR nickname LIKE ? ESCAPE '\\'", like, like)
 	}
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
@@ -40,9 +40,29 @@ func (cc *CommunityController) AdminUsers(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取用户失败"})
 		return
 	}
+	if len(users) == 0 {
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"items": make([]AdminUserDTO, 0), "total": total, "page": page, "pageSize": pageSize}})
+		return
+	}
+	// 逐用户调用 profileData 是每用户 6 次查询的 N+1（20 个用户上百次查询），
+	// 这里按 ID 集合做四次分组统计，查询次数与用户数无关
+	ids := make([]uint, 0, len(users))
+	for _, user := range users {
+		ids = append(ids, user.ID)
+	}
+	postCounts := countPostsByAuthor(cc.DB, ids)
+	likeCounts := countLikesByAuthor(cc.DB, ids)
+	followers, following := countFollowsByUser(cc.DB, ids)
 	items := make([]AdminUserDTO, 0, len(users))
 	for _, user := range users {
-		items = append(items, cc.adminUserData(user))
+		items = append(items, AdminUserDTO{
+			UserDTO:   toUserDTO(user),
+			Status:    user.Status,
+			PostCount: postCounts[user.ID],
+			LikeCount: likeCounts[user.ID],
+			Followers: followers[user.ID],
+			Following: following[user.ID],
+		})
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"items": items, "total": total, "page": page, "pageSize": pageSize}})
 }
@@ -78,6 +98,9 @@ func (cc *CommunityController) UpdateUser(c *gin.Context) {
 	}
 	adminID := currentUserID(c)
 	if err := cc.DB.Transaction(func(tx *gorm.DB) error {
+		if len(updates) > 0 {
+			updates["session_version"] = gorm.Expr("session_version + 1")
+		}
 		if err := tx.Model(&user).Updates(updates).Error; err != nil {
 			return err
 		}
@@ -95,16 +118,83 @@ func (cc *CommunityController) UpdateUser(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新用户失败"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": cc.adminUserData(user)})
+	// 返回更新后的用户数据，供管理端列表原地刷新；重新读取确保 status/role 是最新值
+	if err := cc.DB.First(&user, user.ID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取用户失败"})
+		return
+	}
+	followers, following := countFollowsByUser(cc.DB, []uint{user.ID})
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": AdminUserDTO{
+		UserDTO:   toUserDTO(user),
+		Status:    user.Status,
+		PostCount: countPostsByAuthor(cc.DB, []uint{user.ID})[user.ID],
+		LikeCount: countLikesByAuthor(cc.DB, []uint{user.ID})[user.ID],
+		Followers: followers[user.ID],
+		Following: following[user.ID],
+	}})
 }
 
-// adminUserData 管理端视角的用户数据：包含草稿在内的全量文章数
-func (cc *CommunityController) adminUserData(user models.User) AdminUserDTO {
-	profile := cc.profileData(user)
-	var postCount, likeCount int64
-	cc.DB.Model(&models.Post{}).Where("author_id = ?", user.ID).Count(&postCount)
-	cc.DB.Model(&models.PostLike{}).Joins("JOIN posts ON posts.id = post_likes.post_id").Where("posts.author_id = ?", user.ID).Count(&likeCount)
-	return AdminUserDTO{UserDTO: profile.User, Status: user.Status, PostCount: postCount, LikeCount: likeCount, Followers: profile.Followers, Following: profile.Following}
+// countPostsByAuthor 批量统计每个作者的文章数（含草稿等全部状态），管理端列表使用
+func countPostsByAuthor(db *gorm.DB, ids []uint) map[uint]int64 {
+	counts := map[uint]int64{}
+	if len(ids) == 0 {
+		return counts
+	}
+	var rows []struct {
+		AuthorID uint
+		Count    int64
+	}
+	db.Model(&models.Post{}).Select("author_id, COUNT(*) AS count").Where("author_id IN ?", ids).Group("author_id").Scan(&rows)
+	for _, row := range rows {
+		counts[row.AuthorID] = row.Count
+	}
+	return counts
+}
+
+// countLikesByAuthor 批量统计每个作者的全部文章获赞数
+func countLikesByAuthor(db *gorm.DB, ids []uint) map[uint]int64 {
+	counts := map[uint]int64{}
+	if len(ids) == 0 {
+		return counts
+	}
+	var rows []struct {
+		AuthorID uint
+		Count    int64
+	}
+	db.Model(&models.PostLike{}).
+		Select("posts.author_id AS author_id, COUNT(*) AS count").
+		Joins("JOIN posts ON posts.id = post_likes.post_id").
+		Where("posts.author_id IN ?", ids).Group("posts.author_id").Scan(&rows)
+	for _, row := range rows {
+		counts[row.AuthorID] = row.Count
+	}
+	return counts
+}
+
+// countFollowsByUser 批量统计每个用户的粉丝数与关注数
+func countFollowsByUser(db *gorm.DB, ids []uint) (followers, following map[uint]int64) {
+	followers = map[uint]int64{}
+	following = map[uint]int64{}
+	if len(ids) == 0 {
+		return followers, following
+	}
+	var byFollowing []struct {
+		FollowingID uint
+		Count       int64
+	}
+	db.Model(&models.Follow{}).Select("following_id, COUNT(*) AS count").Where("following_id IN ?", ids).Group("following_id").Scan(&byFollowing)
+	for _, row := range byFollowing {
+		followers[row.FollowingID] = row.Count
+	}
+	var byFollower []struct {
+		FollowerID uint
+		Count      int64
+	}
+	db.Model(&models.Follow{}).Select("follower_id, COUNT(*) AS count").Where("follower_id IN ?", ids).Group("follower_id").Scan(&byFollower)
+	for _, row := range byFollower {
+		following[row.FollowerID] = row.Count
+	}
+	return followers, following
 }
 
 // ActiveUserDTO 概览中的活跃用户条目

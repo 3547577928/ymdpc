@@ -36,16 +36,19 @@ type Tag struct {
 }
 
 type User struct {
-	ID           uint      `json:"id" gorm:"primaryKey"`
-	Username     string    `json:"username" gorm:"size:60;uniqueIndex;not null"`
-	PasswordHash string    `json:"-" gorm:"size:255;not null"`
-	Nickname     string    `json:"nickname" gorm:"size:100"`
-	Avatar       string    `json:"avatar" gorm:"size:500"`
-	Bio          string    `json:"bio" gorm:"size:500"`
-	Role         string    `json:"role" gorm:"size:20;index;not null;default:user"`
-	Status       string    `json:"status" gorm:"size:20;index;not null;default:active"`
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
+	ID           uint   `json:"id" gorm:"primaryKey"`
+	Username     string `json:"username" gorm:"size:60;uniqueIndex;not null"`
+	PasswordHash string `json:"-" gorm:"size:255;not null"`
+	Nickname     string `json:"nickname" gorm:"size:100"`
+	Avatar       string `json:"avatar" gorm:"size:500"`
+	Bio          string `json:"bio" gorm:"size:500"`
+	Role         string `json:"role" gorm:"size:20;index;not null;default:user"`
+	Status       string `json:"status" gorm:"size:20;index;not null;default:active"`
+	// SessionVersion 会话版本号：签发 JWT 时写入 claims，改密码或退出登录时递增，
+	// 使该操作之前签发的 token 立即失效，弥补 JWT 24 小时有效期内无法作废的问题
+	SessionVersion int       `json:"-" gorm:"not null;default:1"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
 }
 
 type Comment struct {

@@ -130,6 +130,10 @@ func (cc *CommunityController) CreateComment(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"code": 0, "message": "success", "data": toCommentDTO(comment, false)})
 }
 
+// DeleteComment 删除评论。评论最多两层：顶层评论的回复都以 parent_id 直接指向它，
+// 删除顶层时一并删除其全部回复，否则子评论的父节点悬空，前端只能把它们提升为
+// 看似无关的顶层评论；同时清理评论点赞、指向被删评论的回复通知，并按实际删除
+// 数量回调文章的评论计数
 func (cc *CommunityController) DeleteComment(c *gin.Context) {
 	var comment models.Comment
 	if err := cc.DB.First(&comment, c.Param("id")).Error; err != nil {
@@ -141,13 +145,21 @@ func (cc *CommunityController) DeleteComment(c *gin.Context) {
 		return
 	}
 	if err := cc.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("comment_id = ?", comment.ID).Delete(&models.CommentLike{}).Error; err != nil {
+		deleteIDs, err := commentDescendantIDs(tx, comment.ID)
+		if err != nil {
 			return err
 		}
-		if err := tx.Delete(&comment).Error; err != nil {
+		if err := tx.Where("comment_id IN ?", deleteIDs).Delete(&models.CommentLike{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Model(&models.Post{}).Where("id = ? AND comments_count > 0", comment.PostID).UpdateColumn("comments_count", gorm.Expr("comments_count - 1")).Error; err != nil {
+		if err := tx.Where("id IN ?", deleteIDs).Delete(&models.Comment{}).Error; err != nil {
+			return err
+		}
+		// 指向被删评论的回复通知一并清理，避免点进去是悬空引用
+		if err := tx.Where("type = ? AND resource_id IN ?", "reply", deleteIDs).Delete(&models.Notification{}).Error; err != nil {
+			return err
+		}
+		if err := refreshPostCommentCount(tx, comment.PostID); err != nil {
 			return err
 		}
 		// 管理员删除评论保留操作日志
@@ -220,17 +232,45 @@ func (cc *CommunityController) AdminUpdateCommentStatus(c *gin.Context) {
 		return
 	}
 	if err := cc.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&comment).Update("status", input.Status).Error; err != nil {
+		commentIDs, err := commentDescendantIDs(tx, comment.ID)
+		if err != nil {
 			return err
 		}
-		// 隐藏减少计数、恢复增加计数，保持评论数与公开评论一致
-		if input.Status == "hidden" {
-			return tx.Model(&models.Post{}).Where("id = ? AND comments_count > 0", comment.PostID).UpdateColumn("comments_count", gorm.Expr("comments_count - 1")).Error
+		if err := tx.Model(&models.Comment{}).Where("id IN ?", commentIDs).Update("status", input.Status).Error; err != nil {
+			return err
 		}
-		return tx.Model(&models.Post{}).Where("id = ?", comment.PostID).UpdateColumn("comments_count", gorm.Expr("comments_count + 1")).Error
+		return refreshPostCommentCount(tx, comment.PostID)
 	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新评论状态失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
+}
+
+// commentDescendantIDs 返回指定评论及其全部后代。正常数据最多两层，但这里按层遍历，
+// 可以同时修复历史数据中意外形成的更深层级，避免删除或审核后留下孤儿评论。
+func commentDescendantIDs(tx *gorm.DB, rootID uint) ([]uint, error) {
+	ids := []uint{rootID}
+	frontier := []uint{rootID}
+	for len(frontier) > 0 {
+		var children []uint
+		if err := tx.Model(&models.Comment{}).Where("parent_id IN ?", frontier).Pluck("id", &children).Error; err != nil {
+			return nil, err
+		}
+		if len(children) == 0 {
+			break
+		}
+		ids = append(ids, children...)
+		frontier = children
+	}
+	return ids, nil
+}
+
+// refreshPostCommentCount 以公开评论实际数量重建计数，避免增减量维护在并发或历史脏数据下漂移。
+func refreshPostCommentCount(tx *gorm.DB, postID uint) error {
+	var count int64
+	if err := tx.Model(&models.Comment{}).Where("post_id = ? AND status = ?", postID, "published").Count(&count).Error; err != nil {
+		return err
+	}
+	return tx.Model(&models.Post{}).Where("id = ?", postID).Update("comments_count", count).Error
 }

@@ -73,8 +73,8 @@ func (cc *CommunityController) Feed(c *gin.Context) {
 	page, pageSize := pagination(c)
 	query := cc.DB.Model(&models.Post{}).Where("posts.status = ? AND posts.moderation_status = ?", "published", "normal")
 	if keyword := strings.TrimSpace(c.Query("q")); keyword != "" {
-		like := "%" + keyword + "%"
-		query = query.Where("posts.title LIKE ? OR posts.summary LIKE ? OR posts.content LIKE ?", like, like, like)
+		like := likePattern(keyword)
+		query = query.Where("posts.title LIKE ? ESCAPE '\\' OR posts.summary LIKE ? ESCAPE '\\' OR posts.content LIKE ? ESCAPE '\\'", like, like, like)
 	}
 	if tag := strings.TrimSpace(c.Query("tag")); tag != "" {
 		query = query.Where("EXISTS (SELECT 1 FROM post_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.post_id = posts.id AND (t.name = ? OR t.slug = ?))", tag, tag)

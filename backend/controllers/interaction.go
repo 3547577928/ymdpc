@@ -78,9 +78,14 @@ func writeAdminLog(db *gorm.DB, adminID uint, action, targetType string, targetI
 	return db.Create(&models.AdminLog{AdminID: adminID, Action: action, TargetType: targetType, TargetID: targetID, Detail: detail}).Error
 }
 
-// deletePostRelations 删除文章时清理关联数据：评论点赞、评论、文章点赞、收藏与相关通知
+// deletePostRelations 删除文章时清理关联数据：评论点赞、回复通知、评论、文章点赞、收藏与站内通知
 func deletePostRelations(tx *gorm.DB, postID uint) error {
+	// 顺序敏感：reply 通知的资源 id 指向评论，必须在删除评论之前清理，
+	// 否则评论已经不存在，这里的子查询永远查不到行，通知会残留在数据库里
 	if err := tx.Where("comment_id IN (SELECT id FROM comments WHERE post_id = ?)", postID).Delete(&models.CommentLike{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("type = ? AND resource_id IN (SELECT id FROM comments WHERE post_id = ?)", "reply", postID).Delete(&models.Notification{}).Error; err != nil {
 		return err
 	}
 	if err := tx.Where("post_id = ?", postID).Delete(&models.Comment{}).Error; err != nil {
@@ -92,7 +97,8 @@ func deletePostRelations(tx *gorm.DB, postID uint) error {
 	if err := tx.Where("post_id = ?", postID).Delete(&models.Favorite{}).Error; err != nil {
 		return err
 	}
-	return tx.Exec("DELETE FROM notifications WHERE (type IN ('like','comment','post') AND resource_id = ?) OR (type = 'reply' AND resource_id IN (SELECT id FROM comments WHERE post_id = ?))", postID, postID).Error
+	// like/comment/post 三类通知的 resource_id 直接指向文章
+	return tx.Where("type IN ? AND resource_id = ?", []string{"like", "comment", "post"}, postID).Delete(&models.Notification{}).Error
 }
 
 // resolveCategory 校验文章关联的分类存在
@@ -160,8 +166,8 @@ func (ic *InteractionController) MyPosts(c *gin.Context) {
 		query = query.Where("status = ?", strings.TrimSpace(c.Query("status")))
 	}
 	if keyword := strings.TrimSpace(c.Query("q")); keyword != "" {
-		like := "%" + keyword + "%"
-		query = query.Where("title LIKE ? OR summary LIKE ?", like, like)
+		like := likePattern(keyword)
+		query = query.Where("title LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'", like, like)
 	}
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
@@ -573,11 +579,30 @@ func (ic *InteractionController) AdminTags(c *gin.Context) {
 		Slug  string `json:"slug"`
 		Usage int64  `json:"usage"`
 	}
+	// 逐个标签/分类 COUNT 是 N+1，改为按关联字段分组统计一次查完
+	tagUsage := map[uint]int64{}
+	var tagRows []struct {
+		TagID uint
+		Count int64
+	}
+	ic.DB.Model(&models.Post{}).Select("pt.tag_id AS tag_id, COUNT(*) AS count").
+		Joins("JOIN post_tags pt ON pt.post_id = posts.id").Group("pt.tag_id").Scan(&tagRows)
+	for _, row := range tagRows {
+		tagUsage[row.TagID] = row.Count
+	}
+	categoryUsage := map[uint]int64{}
+	var categoryRows []struct {
+		CategoryID uint
+		Count      int64
+	}
+	ic.DB.Model(&models.Post{}).Select("category_id, COUNT(*) AS count").
+		Where("category_id IS NOT NULL").Group("category_id").Scan(&categoryRows)
+	for _, row := range categoryRows {
+		categoryUsage[row.CategoryID] = row.Count
+	}
 	tagItems := make([]TagUsage, 0, len(tags))
 	for _, tag := range tags {
-		var count int64
-		ic.DB.Model(&models.Post{}).Joins("JOIN post_tags pt ON pt.post_id = posts.id").Where("pt.tag_id = ?", tag.ID).Count(&count)
-		tagItems = append(tagItems, TagUsage{ID: tag.ID, Name: tag.Name, Slug: tag.Slug, Usage: count})
+		tagItems = append(tagItems, TagUsage{ID: tag.ID, Name: tag.Name, Slug: tag.Slug, Usage: tagUsage[tag.ID]})
 	}
 	type CategoryUsage struct {
 		ID    uint   `json:"id"`
@@ -587,9 +612,7 @@ func (ic *InteractionController) AdminTags(c *gin.Context) {
 	}
 	categoryItems := make([]CategoryUsage, 0, len(categories))
 	for _, category := range categories {
-		var count int64
-		ic.DB.Model(&models.Post{}).Where("category_id = ?", category.ID).Count(&count)
-		categoryItems = append(categoryItems, CategoryUsage{ID: category.ID, Name: category.Name, Slug: category.Slug, Usage: count})
+		categoryItems = append(categoryItems, CategoryUsage{ID: category.ID, Name: category.Name, Slug: category.Slug, Usage: categoryUsage[category.ID]})
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"tags": tagItems, "categories": categoryItems}})
 }

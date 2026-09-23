@@ -174,8 +174,10 @@ export function PostPage() {
     if (!post || !window.confirm('确定删除这条评论吗？')) return
     try {
       await deleteComment(comment.id)
-      setComments(comments.filter((item) => item.id !== comment.id))
-      setPost({ ...post, commentsCount: Math.max(0, post.commentsCount - 1) })
+      // 后端会把该评论下的回复一并删除，前端同步移除，避免刷新前残留孤儿评论
+      const removedReplies = comments.filter((item) => item.parentId === comment.id)
+      setComments(comments.filter((item) => item.id !== comment.id && item.parentId !== comment.id))
+      setPost({ ...post, commentsCount: Math.max(0, post.commentsCount - 1 - removedReplies.length) })
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '删除评论失败')
     }

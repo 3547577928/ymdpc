@@ -132,8 +132,8 @@ func (p *PostController) list(c *gin.Context, status string, includeDrafts bool)
 		query = query.Where("moderation_status = ?", "normal")
 	}
 	if keyword := strings.TrimSpace(c.Query("q")); keyword != "" {
-		like := "%" + keyword + "%"
-		query = query.Where("title LIKE ? OR summary LIKE ? OR content LIKE ?", like, like, like)
+		like := likePattern(keyword)
+		query = query.Where("title LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\'", like, like, like)
 	}
 	if tag := strings.TrimSpace(c.Query("tag")); tag != "" {
 		query = query.Where("EXISTS (SELECT 1 FROM post_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.post_id = posts.id AND (t.name = ? OR t.slug = ?))", tag, tag)
@@ -574,6 +574,16 @@ func slugify(value string) string {
 		slug = strings.Trim(string([]rune(slug)[:80]), "-")
 	}
 	return slug
+}
+
+// likePattern 构造 LIKE 匹配式并转义通配符：用户输入的 % 和 _ 有特殊语义，
+// 不转义时搜索 "%" 会匹配全表、"_" 会匹配任意单字符；转义符用反斜杠，
+// 对应 SQL 需要加 ESCAPE '\' 子句
+func likePattern(keyword string) string {
+	escaped := strings.ReplaceAll(keyword, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, "%", `\%`)
+	escaped = strings.ReplaceAll(escaped, "_", `\_`)
+	return "%" + escaped + "%"
 }
 
 func readingTime(content string) int {

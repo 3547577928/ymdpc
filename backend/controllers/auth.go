@@ -72,7 +72,9 @@ func (a *AuthController) Register(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "注册失败"})
 		return
 	}
-	user := models.User{Username: input.Username, PasswordHash: string(hash), Nickname: input.Nickname, Role: "user", Status: "active"}
+	// SessionVersion 显式置 1（与列默认值一致）：Create 后 GORM 不一定把默认值回填到
+	// 结构体，签发 session 时用字面量值才是最可靠的
+	user := models.User{Username: input.Username, PasswordHash: string(hash), Nickname: input.Nickname, Role: "user", Status: "active", SessionVersion: 1}
 	if err := a.DB.Create(&user).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "注册失败"})
 		return
@@ -113,7 +115,18 @@ func (a *AuthController) Login(c *gin.Context) {
 }
 
 func (a *AuthController) issueSession(c *gin.Context, user models.User) {
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"sub": user.ID, "role": user.Role, "exp": time.Now().Add(24 * time.Hour).Unix()})
+	// sv 写入会话版本号，中间件校验 token 时会与数据库现值比对。
+	// 兼容尚未经过一次启动迁移的旧用户，避免签发版本为 0 的不可用 token。
+	version := user.SessionVersion
+	if version < 1 {
+		version = 1
+		if err := a.DB.Model(&models.User{}).Where("id = ?", user.ID).Update("session_version", version).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "登录失败"})
+			return
+		}
+		user.SessionVersion = version
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"sub": user.ID, "role": user.Role, "sv": version, "exp": time.Now().Add(24 * time.Hour).Unix()})
 	signed, err := token.SignedString([]byte(a.Secret))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "登录失败"})
@@ -124,7 +137,19 @@ func (a *AuthController) issueSession(c *gin.Context, user models.User) {
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": toAuthUserDTO(user)})
 }
 
+// bumpSessionVersion 递增会话版本号，使该操作之前签发的 token 全部失效
+func (a *AuthController) bumpSessionVersion(userID uint) error {
+	return a.DB.Model(&models.User{}).Where("id = ?", userID).Update("session_version", gorm.Expr("session_version + 1")).Error
+}
+
 func (a *AuthController) Logout(c *gin.Context) {
+	// 登出即视为所有设备下线：递增会话版本号，旧 token 不再被中间件接受
+	if userID := currentUserID(c); userID > 0 {
+		if err := a.bumpSessionVersion(userID); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "退出登录失败"})
+			return
+		}
+	}
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie("qs_token", "", -1, "/", "", a.CookieSecure, true)
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
@@ -201,7 +226,9 @@ func (a *AuthController) UpdatePassword(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "修改密码失败"})
 		return
 	}
-	if err := a.DB.Model(&user).Update("password_hash", string(hash)).Error; err != nil {
+	// 换密码成功后递增会话版本号：当前 token 随之失效，用户需重新登录，
+	// 避免密码泄露后旧会话在其他设备上继续可用
+	if err := a.DB.Model(&user).Updates(map[string]any{"password_hash": string(hash), "session_version": gorm.Expr("session_version + 1")}).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "修改密码失败"})
 		return
 	}

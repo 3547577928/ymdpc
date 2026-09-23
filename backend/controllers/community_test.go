@@ -348,3 +348,63 @@ func TestAdminCommentModeration(t *testing.T) {
 		t.Fatalf("expected comments count 1 after restore, got %d", storedPost.CommentsCount)
 	}
 }
+
+func TestDeleteCommentRemovesDescendantsAndRebuildsCount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newCommunityTestDB(t)
+	users := []models.User{
+		{Username: "author", Nickname: "Author", Role: "user", Status: "active"},
+		{Username: "alice", Nickname: "Alice", Role: "user", Status: "active"},
+	}
+	if err := db.Create(&users).Error; err != nil {
+		t.Fatal(err)
+	}
+	post := models.Post{AuthorID: users[0].ID, Title: "Post", Slug: "post", Content: "body", Status: "published", CommentsCount: 99, PublishedAt: time.Now()}
+	if err := db.Create(&post).Error; err != nil {
+		t.Fatal(err)
+	}
+	root := models.Comment{PostID: post.ID, AuthorID: users[0].ID, Content: "root", Status: "published"}
+	if err := db.Create(&root).Error; err != nil {
+		t.Fatal(err)
+	}
+	reply := models.Comment{PostID: post.ID, AuthorID: users[1].ID, ParentID: &root.ID, Content: "reply", Status: "published"}
+	if err := db.Create(&reply).Error; err != nil {
+		t.Fatal(err)
+	}
+	nested := models.Comment{PostID: post.ID, AuthorID: users[0].ID, ParentID: &reply.ID, Content: "nested", Status: "published"}
+	if err := db.Create(&nested).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&models.CommentLike{UserID: users[1].ID, CommentID: nested.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&models.Notification{UserID: users[0].ID, ActorID: users[1].ID, Type: "reply", ResourceID: nested.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	community := &CommunityController{DB: db}
+	response := authenticatedRequest(community.DeleteComment, http.MethodDelete, "/api/comments/1", "", gin.Params{{Key: "id", Value: fmt.Sprint(root.ID)}}, users[0].ID, "user")
+	if response.Code != http.StatusOK {
+		t.Fatalf("delete returned %d: %s", response.Code, response.Body.String())
+	}
+	var remaining int64
+	db.Model(&models.Comment{}).Where("post_id = ?", post.ID).Count(&remaining)
+	if remaining != 0 {
+		t.Fatalf("expected all descendants removed, got %d comments", remaining)
+	}
+	db.Model(&models.CommentLike{}).Where("comment_id IN ?", []uint{root.ID, reply.ID, nested.ID}).Count(&remaining)
+	if remaining != 0 {
+		t.Fatalf("expected comment likes removed, got %d", remaining)
+	}
+	db.Model(&models.Notification{}).Where("type = ? AND resource_id = ?", "reply", nested.ID).Count(&remaining)
+	if remaining != 0 {
+		t.Fatalf("expected reply notifications removed, got %d", remaining)
+	}
+	var storedPost models.Post
+	if err := db.First(&storedPost, post.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedPost.CommentsCount != 0 {
+		t.Fatalf("expected rebuilt comments count 0, got %d", storedPost.CommentsCount)
+	}
+}

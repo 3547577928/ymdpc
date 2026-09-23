@@ -56,3 +56,32 @@ func TestUpdatePassword(t *testing.T) {
 		t.Fatal("password was not updated to the new value")
 	}
 }
+
+func TestLogoutBumpsSessionVersion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "-") + "?mode=memory&cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.User{}); err != nil {
+		t.Fatal(err)
+	}
+	user := models.User{Username: "alice", PasswordHash: "hash", Nickname: "Alice", Role: "user", Status: "active", SessionVersion: 3}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	auth := &AuthController{DB: db, Secret: "test-secret"}
+	response := authenticatedRequest(auth.Logout, http.MethodPost, "/api/auth/logout", "", nil, user.ID, "user")
+	if response.Code != http.StatusOK {
+		t.Fatalf("logout returned %d: %s", response.Code, response.Body.String())
+	}
+	var stored models.User
+	if err := db.First(&stored, user.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.SessionVersion != 4 {
+		t.Fatalf("expected session version 4 after logout, got %d", stored.SessionVersion)
+	}
+}

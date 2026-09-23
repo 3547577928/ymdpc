@@ -16,6 +16,11 @@ func Seed(db *gorm.DB, username, password string) error {
 	if err := db.Model(&User{}).Where("id = ?", admin.ID).Updates(map[string]any{"role": "admin", "status": "active"}).Error; err != nil {
 		return err
 	}
+	// 新增 session_version 列时，已有用户的值为 0（default 只作用于新行），
+	// 修正为 1 与签发逻辑使用的初始版本一致
+	if err := db.Model(&User{}).Where("session_version = 0").Update("session_version", 1).Error; err != nil {
+		return err
+	}
 	if err := db.Model(&Post{}).Where("reading_time IS NULL OR reading_time = 0").Update("reading_time", 1).Error; err != nil {
 		return err
 	}
