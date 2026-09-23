@@ -15,6 +15,40 @@ const navItems: NavItem[] = [
 // 关注 feed 和文章列表共用 /posts，只靠 mode 参数区分，单独列出便于计算选中态
 const followingNavItem: NavItem = { to: '/posts?mode=following', label: '关注', icon: Rss }
 
+// 已登录用户的导航区：写文章入口、通知铃铛（带未读角标）与个人下拉菜单
+function NavUserMenu({ user, unread, onSignOut }: { user: AuthUser; unread: number; onSignOut: () => void }) {
+  return (
+    <>
+      <Link className="nav-icon-link nav-write" data-tooltip="写文章" aria-label="写文章" to="/write"><PenLine size={17} strokeWidth={1.8} /></Link>
+      <Link className="nav-icon-link nav-bell" data-tooltip="通知中心" to="/notifications" aria-label="通知中心">
+        <Bell size={17} strokeWidth={1.8} />
+        {unread > 0 && <span className="nav-bell-badge">{unread > 99 ? '99+' : unread}</span>}
+      </Link>
+      <details className="nav-user-menu">
+        <summary className="nav-icon-summary" data-tooltip={`${user.nickname}菜单`} aria-label={`${user.nickname}菜单`}><UserCircle size={17} strokeWidth={1.8} /></summary>
+        <div className="nav-dropdown">
+          <Link to={`/users/${user.username}`}>个人主页</Link>
+          <Link to="/me/posts">我的文章</Link>
+          <Link to="/me/posts?status=draft">草稿箱</Link>
+          <Link to="/me/favorites">我的收藏</Link>
+          <Link to="/settings/profile">账号设置</Link>
+          <button className="nav-signout" onClick={onSignOut}>退出登录</button>
+        </div>
+      </details>
+    </>
+  )
+}
+
+// 未登录时的导航区：登录与注册入口
+function NavGuestLinks() {
+  return (
+    <>
+      <Link className="nav-icon-link nav-user" data-tooltip="登录" aria-label="登录" to="/login"><LogIn size={17} strokeWidth={1.8} /></Link>
+      <Link className="nav-icon-link nav-write" data-tooltip="注册" aria-label="注册" to="/register"><UserPlus size={17} strokeWidth={1.8} /></Link>
+    </>
+  )
+}
+
 export function Shell({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser>()
   const [unread, setUnread] = useState(0)
@@ -65,7 +99,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <nav className="primary-nav">
             {navItems.map(navIconLink)}
             {user && navIconLink(followingNavItem)}
-            {user ? <><Link className="nav-icon-link nav-write" data-tooltip="写文章" aria-label="写文章" to="/write"><PenLine size={17} strokeWidth={1.8} /></Link><Link className="nav-icon-link nav-bell" data-tooltip="通知中心" to="/notifications" aria-label="通知中心"><Bell size={17} strokeWidth={1.8} />{unread > 0 && <span className="nav-bell-badge">{unread > 99 ? '99+' : unread}</span>}</Link><details className="nav-user-menu"><summary className="nav-icon-summary" data-tooltip={`${user.nickname}菜单`} aria-label={`${user.nickname}菜单`}><UserCircle size={17} strokeWidth={1.8} /></summary><div className="nav-dropdown"><Link to={`/users/${user.username}`}>个人主页</Link><Link to="/me/posts">我的文章</Link><Link to="/me/posts?status=draft">草稿箱</Link><Link to="/me/favorites">我的收藏</Link><Link to="/settings/profile">账号设置</Link><button className="nav-signout" onClick={() => void signOut()}>退出登录</button></div></details></> : <><Link className="nav-icon-link nav-user" data-tooltip="登录" aria-label="登录" to="/login"><LogIn size={17} strokeWidth={1.8} /></Link><Link className="nav-icon-link nav-write" data-tooltip="注册" aria-label="注册" to="/register"><UserPlus size={17} strokeWidth={1.8} /></Link></>}
+            {user
+              ? <NavUserMenu user={user} unread={unread} onSignOut={() => void signOut()} />
+              : <NavGuestLinks />}
           </nav>
         </div>
       </header>

@@ -15,14 +15,27 @@ export type FeedPage = PostPage & { mode: string }
 export type UserProfile = { user: UserSummary; posts: PostSummary[]; postCount: number; likeCount: number; followers: number; following: number; followingMe: boolean }
 export type AdminUser = UserSummary & { status: string; postCount: number; likeCount: number; followers: number; following: number }
 
+// 请求超时：后端无响应时及时失败，避免页面长期停留在加载态
+const REQUEST_TIMEOUT_MS = 15_000
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const headers = new Headers(options?.headers)
   if (options?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
-  const response = await fetch(`${API_BASE}${path}`, {
-    credentials: 'include',
-    headers,
-    ...options,
-  })
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      credentials: 'include',
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      headers,
+    })
+  } catch (reason) {
+    // 超时抛的是 DOMException，转成中文提示，其余错误原样抛出
+    if (reason instanceof DOMException && reason.name === 'TimeoutError') {
+      throw new Error('请求超时，请检查网络后重试')
+    }
+    throw reason
+  }
   const payload = await response.json().catch(() => ({
     code: response.status,
     message: response.ok ? '服务器响应格式错误' : `请求失败 (${response.status})`,

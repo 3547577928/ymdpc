@@ -174,30 +174,45 @@ func (ic *InteractionController) MyPosts(c *gin.Context) {
 		return
 	}
 	items := make([]PostSummaryDTO, 0, len(posts))
+	liked, favorited := interactionSets(ic.DB, currentUserID(c), postIDs(posts))
 	for _, post := range posts {
-		items = append(items, toPostSummaryDTO(post))
+		item := toPostSummaryDTO(post)
+		item.Liked = liked[post.ID]
+		item.Favorited = favorited[post.ID]
+		items = append(items, item)
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"items": items, "total": total, "page": page, "pageSize": pageSize}})
 }
 
-// MyFavorites 当前用户收藏的文章列表
+// MyFavorites 当前用户收藏的文章列表。收藏后文章可能被删除或下架，
+// 通过 join 文章表过滤，避免收藏页出现点进去 404 的条目
 func (ic *InteractionController) MyFavorites(c *gin.Context) {
 	userID := currentUserID(c)
 	page, pageSize := pagination(c)
-	query := ic.DB.Model(&models.Favorite{}).Where("favorites.user_id = ?", userID)
+	query := ic.DB.Model(&models.Favorite{}).
+		Joins("JOIN posts ON posts.id = favorites.post_id").
+		Where("favorites.user_id = ? AND posts.status = ? AND posts.moderation_status = ?", userID, "published", "normal")
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取收藏失败"})
 		return
 	}
 	var favorites []models.Favorite
-	if err := query.Preload("Post").Preload("Post.Tags").Preload("Post.Author").Preload("Post.Category").Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&favorites).Error; err != nil {
+	if err := query.Preload("Post").Preload("Post.Tags").Preload("Post.Author").Preload("Post.Category").Order("favorites.created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&favorites).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取收藏失败"})
 		return
 	}
 	items := make([]PostSummaryDTO, 0, len(favorites))
+	collected := make([]models.Post, 0, len(favorites))
 	for _, favorite := range favorites {
-		items = append(items, toPostSummaryDTO(favorite.Post))
+		collected = append(collected, favorite.Post)
+	}
+	liked, favorited := interactionSets(ic.DB, userID, postIDs(collected))
+	for _, post := range collected {
+		item := toPostSummaryDTO(post)
+		item.Liked = liked[post.ID]
+		item.Favorited = favorited[post.ID]
+		items = append(items, item)
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"items": items, "total": total, "page": page, "pageSize": pageSize}})
 }
@@ -264,30 +279,76 @@ func (ic *InteractionController) Notifications(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取通知失败"})
 		return
 	}
+	// 通知的目标资源可能是文章或被回复的评论，逐条查询会产生 N+1，
+	// 这里按通知 ID 批量预取文章元信息后查表填充
+	metaByNotification := notificationPostMeta(ic.DB, notifications)
 	items := make([]NotificationDTO, 0, len(notifications))
 	for _, notification := range notifications {
 		item := NotificationDTO{ID: notification.ID, Type: notification.Type, ResourceID: notification.ResourceID, Read: notification.ReadAt != nil, CreatedAt: notification.CreatedAt, Actor: toUserDTO(notification.Actor)}
-		// 填充目标文章的标题与 slug，便于前端生成跳转链接
-		switch notification.Type {
-		case "comment", "like", "post":
-			var post models.Post
-			if err := ic.DB.Select("title", "slug").First(&post, notification.ResourceID).Error; err == nil {
-				item.ResourceSlug = post.Slug
-				item.ResourceTitle = post.Title
-			}
-		case "reply":
-			var comment models.Comment
-			if err := ic.DB.Select("post_id").First(&comment, notification.ResourceID).Error; err == nil {
-				var post models.Post
-				if err := ic.DB.Select("title", "slug").First(&post, comment.PostID).Error; err == nil {
-					item.ResourceSlug = post.Slug
-					item.ResourceTitle = post.Title
-				}
-			}
+		// 从预取的文章元信息中取标题与 slug，便于前端生成跳转链接
+		if meta, ok := metaByNotification[notification.ID]; ok {
+			item.ResourceSlug = meta.Slug
+			item.ResourceTitle = meta.Title
 		}
 		items = append(items, item)
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"items": items, "total": total, "unread": unread, "page": page, "pageSize": pageSize}})
+}
+
+// postMeta 通知目标文章的标题与 slug
+type postMeta struct {
+	Title string
+	Slug  string
+}
+
+// notificationPostMeta 按通知 ID 批量预取关联文章的标题与 slug：
+// comment/like/post 类通知的 resource_id 直接指向文章；reply 类指向评论，
+// 需先按评论找到所属文章。整个列表最多三次查询（文章、评论、回复关联文章），
+// 与通知条数无关；文章已被删除时对应通知不填充，前端降级为不可跳转
+func notificationPostMeta(db *gorm.DB, notifications []models.Notification) map[uint]postMeta {
+	postIDs := make([]uint, 0, len(notifications))
+	replyCommentIDs := make([]uint, 0, len(notifications))
+	for _, notification := range notifications {
+		switch notification.Type {
+		case "comment", "like", "post":
+			postIDs = append(postIDs, notification.ResourceID)
+		case "reply":
+			replyCommentIDs = append(replyCommentIDs, notification.ResourceID)
+		}
+	}
+	// 回复类通知先按评论批量取 post_id，并入文章查询集合
+	commentPostID := map[uint]uint{}
+	if len(replyCommentIDs) > 0 {
+		var comments []models.Comment
+		db.Select("id", "post_id").Where("id IN ?", replyCommentIDs).Find(&comments)
+		for _, comment := range comments {
+			commentPostID[comment.ID] = comment.PostID
+			postIDs = append(postIDs, comment.PostID)
+		}
+	}
+	posts := map[uint]postMeta{}
+	if len(postIDs) > 0 {
+		var rows []models.Post
+		db.Select("id", "title", "slug").Where("id IN ?", postIDs).Find(&rows)
+		for _, row := range rows {
+			posts[row.ID] = postMeta{Title: row.Title, Slug: row.Slug}
+		}
+	}
+	meta := map[uint]postMeta{}
+	for _, notification := range notifications {
+		// follow 类通知的 resource_id 是关注者用户 ID，与文章 ID 不同空间，不能顺便填充
+		if notification.Type == "follow" {
+			continue
+		}
+		postID := notification.ResourceID
+		if notification.Type == "reply" {
+			postID = commentPostID[notification.ResourceID]
+		}
+		if post, ok := posts[postID]; ok {
+			meta[notification.ID] = post
+		}
+	}
+	return meta
 }
 
 // MarkNotificationRead 标记通知为已读

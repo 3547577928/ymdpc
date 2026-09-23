@@ -1,11 +1,13 @@
 package controllers
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"quietsignal/backend/models"
@@ -16,25 +18,34 @@ import (
 
 type PostController struct{ DB *gorm.DB }
 
-func (p *PostController) isPostLiked(c *gin.Context, postID uint) bool {
-	userID := currentUserID(c)
-	if userID == 0 {
-		return false
+// interactionSets 批量查询当前用户对一组文章的点赞与收藏状态。
+// 列表接口逐篇文章 COUNT 会产生 N+1 查询（一页 12 篇就多 12 次查询），
+// 这里合并为两次 IN 查询，由调用方在渲染 DTO 时查表填充
+func interactionSets(db *gorm.DB, userID uint, postIDs []uint) (liked, favorited map[uint]bool) {
+	liked = map[uint]bool{}
+	favorited = map[uint]bool{}
+	if userID == 0 || len(postIDs) == 0 {
+		return liked, favorited
 	}
-	var count int64
-	p.DB.Model(&models.PostLike{}).Where("user_id = ? AND post_id = ?", userID, postID).Count(&count)
-	return count > 0
+	var likedIDs, favoritedIDs []uint
+	db.Model(&models.PostLike{}).Where("user_id = ? AND post_id IN ?", userID, postIDs).Pluck("post_id", &likedIDs)
+	db.Model(&models.Favorite{}).Where("user_id = ? AND post_id IN ?", userID, postIDs).Pluck("post_id", &favoritedIDs)
+	for _, id := range likedIDs {
+		liked[id] = true
+	}
+	for _, id := range favoritedIDs {
+		favorited[id] = true
+	}
+	return liked, favorited
 }
 
-// isPostFavorited 判断当前用户是否收藏了文章
-func (p *PostController) isPostFavorited(c *gin.Context, postID uint) bool {
-	userID := currentUserID(c)
-	if userID == 0 {
-		return false
+// postIDs 提取文章 ID 集合，用于 interactionSets 的批量查询
+func postIDs(posts []models.Post) []uint {
+	ids := make([]uint, 0, len(posts))
+	for _, post := range posts {
+		ids = append(ids, post.ID)
 	}
-	var count int64
-	p.DB.Model(&models.Favorite{}).Where("user_id = ? AND post_id = ?", userID, postID).Count(&count)
-	return count > 0
+	return ids
 }
 
 type CategoryDTO struct {
@@ -142,9 +153,11 @@ func (p *PostController) list(c *gin.Context, status string, includeDrafts bool)
 		return
 	}
 	items := make([]PostSummaryDTO, 0, len(posts))
+	liked, favorited := interactionSets(p.DB, currentUserID(c), postIDs(posts))
 	for _, post := range posts {
 		item := toPostSummaryDTO(post)
-		item.Liked = p.isPostLiked(c, post.ID)
+		item.Liked = liked[post.ID]
+		item.Favorited = favorited[post.ID]
 		items = append(items, item)
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"items": items, "total": total, "page": page, "pageSize": pageSize}})
@@ -167,8 +180,9 @@ func (p *PostController) Detail(c *gin.Context) {
 		return
 	}
 	detail := toPostDTO(post)
-	detail.Liked = p.isPostLiked(c, post.ID)
-	detail.Favorited = p.isPostFavorited(c, post.ID)
+	liked, favorited := interactionSets(p.DB, currentUserID(c), []uint{post.ID})
+	detail.Liked = liked[post.ID]
+	detail.Favorited = favorited[post.ID]
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": PostDetailDTO{Post: detail, Previous: previous, Next: next}})
 }
 
@@ -233,12 +247,11 @@ func (p *PostController) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "分类不存在"})
 		return
 	}
-	slug = uniqueSlug(p.DB, slugify(slug), 0)
-	post := models.Post{AuthorID: currentUserID(c), Title: strings.TrimSpace(input.Title), Slug: slug, Summary: input.Summary, Content: input.Content, CoverImage: input.CoverImage, Status: status, Featured: input.Featured, ReadingTime: readingTime(input.Content), CategoryID: input.CategoryID}
+	post := models.Post{AuthorID: currentUserID(c), Title: strings.TrimSpace(input.Title), Summary: input.Summary, Content: input.Content, CoverImage: input.CoverImage, Status: status, Featured: input.Featured, ReadingTime: readingTime(input.Content), CategoryID: input.CategoryID}
 	if status == "published" {
 		post.PublishedAt = time.Now()
 	}
-	if err := p.DB.Transaction(func(tx *gorm.DB) error {
+	if err := savePostWithSlugRetry(p.DB, slugify(slug), &post, func(tx *gorm.DB) error {
 		if err := tx.Create(&post).Error; err != nil {
 			return err
 		}
@@ -283,7 +296,6 @@ func (p *PostController) Update(c *gin.Context) {
 		slug = post.Slug
 	}
 	post.Title = strings.TrimSpace(input.Title)
-	post.Slug = uniqueSlug(p.DB, slugify(slug), post.ID)
 	post.Summary = input.Summary
 	post.Content = input.Content
 	post.CoverImage = input.CoverImage
@@ -294,7 +306,7 @@ func (p *PostController) Update(c *gin.Context) {
 	if status == "published" && post.PublishedAt.IsZero() {
 		post.PublishedAt = time.Now()
 	}
-	if err := p.DB.Transaction(func(tx *gorm.DB) error {
+	if err := savePostWithSlugRetry(p.DB, slugify(slug), &post, func(tx *gorm.DB) error {
 		if err := tx.Save(&post).Error; err != nil {
 			return err
 		}
@@ -524,10 +536,44 @@ func uniqueSlug(db *gorm.DB, base string, id uint) string {
 	}
 }
 
+// savePostWithSlugRetry 在事务中保存文章。slug 唯一索引冲突只会来自并发写入
+// （相同标题/链接标识同时创建），此时基于基础 slug 重新生成后缀再重试一次，
+// 把并发冲突收敛为重试而不是向用户暴露「创建文章失败」；save 必须只是写库，
+// 不能包含面向客户端的响应，否则重试会写出两份响应
+func savePostWithSlugRetry(db *gorm.DB, base string, post *models.Post, save func(tx *gorm.DB) error) error {
+	post.Slug = uniqueSlug(db, base, post.ID)
+	err := db.Transaction(save)
+	if !errors.Is(err, gorm.ErrDuplicatedKey) {
+		return err
+	}
+	post.Slug = uniqueSlug(db, base, post.ID)
+	return db.Transaction(save)
+}
+
+// slugify 把标题转换为 URL 安全的文章标识：仅保留字母、数字和中日韩字符，
+// 其余字符（含 ?、#、% 等保留字符）统一折叠为连字符，避免生成的链接被前端
+// 或浏览器解析成 query string 而打不开文章；同时限制长度防止超出字段上限
 func slugify(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
-	value = strings.NewReplacer(" ", "-", "/", "-", "_", "-").Replace(value)
-	return value
+	var builder strings.Builder
+	pendingDash := false
+	for _, r := range value {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			// 连字符只在一串非法字符的首个位置写入，后续连续非法字符不再重复写
+			builder.WriteRune(r)
+			pendingDash = false
+		case !pendingDash:
+			builder.WriteByte('-')
+			pendingDash = true
+		}
+	}
+	slug := strings.Trim(builder.String(), "-")
+	// slug 字段上限 180，这里按字符数截断（避免按字节切坏多字节字符），余量留给 uniqueSlug 追加序号
+	if utf8.RuneCountInString(slug) > 80 {
+		slug = strings.Trim(string([]rune(slug)[:80]), "-")
+	}
+	return slug
 }
 
 func readingTime(content string) int {

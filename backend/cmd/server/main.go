@@ -39,8 +39,10 @@ func main() {
 		separator = "&"
 	}
 	// 迁移连接不启用外键：SQLite 变更表结构时需要重建表，外键引用会阻止 DROP TABLE
+	// TranslateError 把驱动错误翻译为 gorm.ErrDuplicatedKey 等语义错误，
+	// 文章 slug 唯一索引冲突时的重试依赖它识别
 	migrateDSN := cfg.DatabasePath + separator + "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
-	migrateDB, err := gorm.Open(sqlite.Open(migrateDSN), &gorm.Config{})
+	migrateDB, err := gorm.Open(sqlite.Open(migrateDSN), &gorm.Config{TranslateError: true})
 	if err != nil {
 		log.Fatalf("connect database: %v", err)
 	}
@@ -52,7 +54,7 @@ func main() {
 	}
 	// 运行时连接保持外键开启，由数据库兜底引用完整性
 	dsn := cfg.DatabasePath + separator + "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{TranslateError: true})
 	if err != nil {
 		log.Fatalf("connect database: %v", err)
 	}
@@ -62,7 +64,7 @@ func main() {
 
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery(), cors.New(corsConfig(cfg.AllowedOrigins, gin.Mode() != gin.ReleaseMode)))
-	routes.Register(r, routes.Dependencies{Posts: &controllers.PostController{DB: db}, Community: &controllers.CommunityController{DB: db}, Interactions: &controllers.InteractionController{DB: db}, Tags: &controllers.TagController{DB: db}, Auth: &controllers.AuthController{DB: db, Secret: cfg.JWTSecret, CookieSecure: cfg.CookieSecure}, Secret: cfg.JWTSecret})
+	routes.Register(r, routes.Dependencies{Posts: &controllers.PostController{DB: db}, Community: &controllers.CommunityController{DB: db}, Interactions: &controllers.InteractionController{DB: db}, Tags: &controllers.TagController{DB: db}, Auth: &controllers.AuthController{DB: db, Secret: cfg.JWTSecret, CookieSecure: cfg.CookieSecure}, Secret: cfg.JWTSecret, DB: db})
 
 	log.Printf("quiet signal api listening on :%s", cfg.Port)
 	server := &http.Server{

@@ -7,6 +7,7 @@ import (
 	"quietsignal/backend/middleware"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type Dependencies struct {
@@ -16,6 +17,8 @@ type Dependencies struct {
 	Tags         *controllers.TagController
 	Auth         *controllers.AuthController
 	Secret       string
+	// DB 供管理端中间件复核角色与账号状态，见 middleware.RequireAdmin
+	DB *gorm.DB
 }
 
 func Register(r *gin.Engine, deps Dependencies) {
@@ -47,7 +50,7 @@ func Register(r *gin.Engine, deps Dependencies) {
 	api.PUT("/posts/id/:id", writeLimit, middleware.RequireAuth(deps.Secret), deps.Community.UpdatePost)
 	api.DELETE("/posts/id/:id", writeLimit, middleware.RequireAuth(deps.Secret), deps.Community.DeletePost)
 	api.GET("/posts/:slug", middleware.OptionalAuth(deps.Secret), deps.Posts.Detail)
-	api.POST("/posts/:slug/views", deps.Posts.RecordView)
+	api.POST("/posts/:slug/views", writeLimit, deps.Posts.RecordView)
 	api.POST("/posts/:slug/favorite", writeLimit, middleware.RequireAuth(deps.Secret), deps.Interactions.FavoritePost)
 	api.DELETE("/posts/:slug/favorite", writeLimit, middleware.RequireAuth(deps.Secret), deps.Interactions.UnfavoritePost)
 	api.GET("/posts/:slug/comments", deps.Community.ListComments)
@@ -59,7 +62,7 @@ func Register(r *gin.Engine, deps Dependencies) {
 	api.DELETE("/comments/:id", writeLimit, middleware.RequireAuth(deps.Secret), deps.Community.DeleteComment)
 	api.GET("/tags", deps.Tags.List)
 
-	admin := api.Group("/admin", middleware.RequireAdmin(deps.Secret))
+	admin := api.Group("/admin", middleware.RequireAdmin(deps.Secret, deps.DB))
 	admin.GET("/posts", deps.Posts.AdminList)
 	admin.GET("/stats", deps.Community.UserStats)
 	admin.GET("/users", deps.Community.AdminUsers)

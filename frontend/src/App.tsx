@@ -13,11 +13,39 @@ import { ProfilePage } from './pages/ProfilePage'
 import { ProfileSettingsPage } from './pages/ProfileSettingsPage'
 import { WritePage } from './pages/WritePage'
 
+// 社区内容页统一挂在 Shell 布局（页头导航 + 页脚）下；
+// 登录、注册、后台没有导航需求，使用各自的独立布局
+const shellPages = [
+  { path: '/', element: <HomePage /> },
+  { path: '/posts', element: <PostsPage /> },
+  { path: '/posts/:slug', element: <PostPage /> },
+  { path: '/posts/:id/edit', element: <WritePage /> },
+  { path: '/write', element: <WritePage /> },
+  { path: '/about', element: <AboutPage /> },
+  { path: '/me/posts', element: <MyPostsPage /> },
+  { path: '/me/favorites', element: <FavoritesPage /> },
+  { path: '/notifications', element: <NotificationsPage /> },
+  { path: '/users/:username', element: <ProfilePage /> },
+  { path: '/settings/profile', element: <ProfileSettingsPage /> },
+]
+
 export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route element={<Shell><Routes><Route path="/" element={<HomePage />} /><Route path="/posts" element={<PostsPage />} /><Route path="/posts/:slug" element={<PostPage />} /><Route path="/posts/:id/edit" element={<WritePage />} /><Route path="/about" element={<AboutPage />} /><Route path="/write" element={<WritePage />} /><Route path="/me/posts" element={<MyPostsPage />} /><Route path="/me/favorites" element={<FavoritesPage />} /><Route path="/notifications" element={<NotificationsPage />} /><Route path="/users/:username" element={<ProfilePage />} /><Route path="/settings/profile" element={<ProfileSettingsPage />} /><Route path="*" element={<div className="container empty-state post-not-found"><h1>页面不存在</h1></div>} /></Routes></Shell>} path="/*" />
+        <Route
+          path="/*"
+          element={
+            <Shell>
+              <Routes>
+                {shellPages.map(({ path, element }) => (
+                  <Route key={path} path={path} element={element} />
+                ))}
+                <Route path="*" element={<div className="container empty-state post-not-found"><h1>页面不存在</h1></div>} />
+              </Routes>
+            </Shell>
+          }
+        />
         <Route path="/login" element={<AuthPage />} />
         <Route path="/register" element={<AuthPage />} />
         <Route path="/admin" element={<AdminPage />} />
