@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
@@ -8,12 +9,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
+	"log"
+	"math/big"
 	"net"
 	"net/http"
 	"net/mail"
 	"net/smtp"
-	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -25,7 +26,13 @@ import (
 	"gorm.io/gorm"
 )
 
-var emailLocalPartPattern = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
+var (
+	emailLocalPartPattern = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
+	emailCodePattern      = regexp.MustCompile(`^[0-9]{6}$`)
+	errRegistrationClosed = errors.New("registration closed")
+	errAccountDisabled    = errors.New("account disabled")
+	errCodeConsumed       = errors.New("email code consumed")
+)
 
 func normalizeEmail(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
@@ -51,20 +58,21 @@ func emailTaken(db *gorm.DB, email string, excludedUserID uint) bool {
 	return query.Count(&count).Error == nil && count > 0
 }
 
-func randomToken() (string, error) {
-	bytes := make([]byte, 32)
-	if _, err := io.ReadFull(rand.Reader, bytes); err != nil {
+func randomEmailCode() (string, error) {
+	value, err := rand.Int(rand.Reader, big.NewInt(1_000_000))
+	if err != nil {
 		return "", err
 	}
-	return base64.RawURLEncoding.EncodeToString(bytes), nil
+	return fmt.Sprintf("%06d", value.Int64()), nil
 }
 
-func hashToken(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:])
+func hashEmailCode(secret, email, code string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(email + ":" + code))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func (a *AuthController) RequestMagicLink(c *gin.Context) {
+func (a *AuthController) RequestEmailCode(c *gin.Context) {
 	var input struct {
 		Email string `json:"email" binding:"required"`
 	}
@@ -77,87 +85,108 @@ func (a *AuthController) RequestMagicLink(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
 		return
 	}
-	if a.SMTPPassword == "" && a.SendMagicLink == nil {
+	if a.SMTPPassword == "" && a.SendEmailCode == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "message": "邮件服务尚未配置，请联系管理员"})
 		return
 	}
 
 	var user models.User
-	err := a.DB.Where("email = ?", email).First(&user).Error
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "发送登录链接失败"})
+	userErr := a.DB.Where("email = ?", email).First(&user).Error
+	if userErr != nil && !errors.Is(userErr, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "发送验证码失败"})
 		return
 	}
-	if err == nil && user.Status != "active" {
-		// 对外继续返回同一提示，避免通过接口枚举被限制的账号。
-		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "如果邮箱可用，登录链接已发送，请查收邮件。"})
+	if userErr == nil && user.Status != "active" {
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "如果邮箱可用，验证码已发送，请查收邮件。"})
 		return
 	}
 
-	token, err := randomToken()
+	code, err := randomEmailCode()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "生成登录链接失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "生成验证码失败"})
 		return
 	}
-	ttl := a.MagicLinkTTL
+	ttl := a.EmailCodeTTL
 	if ttl <= 0 {
 		ttl = 15 * time.Minute
 	}
-	magicToken := models.MagicLinkToken{Email: email, TokenHash: hashToken(token), ExpiresAt: time.Now().Add(ttl), RequestIP: c.ClientIP()}
-	if err == nil {
-		magicToken.UserID = &user.ID
+	record := models.EmailLoginCode{Email: email, CodeHash: hashEmailCode(a.Secret, email, code), ExpiresAt: time.Now().Add(ttl), RequestIP: c.ClientIP()}
+	if userErr == nil {
+		record.UserID = &user.ID
 	}
-	if tx := a.DB.Where("email = ? AND used_at IS NULL", email).Delete(&models.MagicLinkToken{}); tx.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "发送登录链接失败"})
+	if err := a.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("email = ? AND used_at IS NULL", email).Delete(&models.EmailLoginCode{}).Error; err != nil {
+			return err
+		}
+		return tx.Create(&record).Error
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "发送验证码失败"})
 		return
 	}
-	if err := a.DB.Create(&magicToken).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "发送登录链接失败"})
-		return
-	}
-
-	link := strings.TrimRight(a.AppBaseURL, "/") + "/auth/magic-link?token=" + url.QueryEscape(token)
-	if err := a.sendMagicLink(email, link); err != nil {
-		a.DB.Delete(&magicToken)
+	if err := a.sendEmailCode(email, code); err != nil {
+		log.Printf("email login code delivery failed: host=%s port=%d err=%v", a.SMTPHost, a.SMTPPort, err)
+		a.DB.Delete(&record)
 		c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "message": "邮件发送失败，请稍后重试"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "如果邮箱可用，登录链接已发送，请查收邮件。"})
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "验证码已发送，请查收邮件。"})
 }
 
-func (a *AuthController) VerifyMagicLink(c *gin.Context) {
+func (a *AuthController) VerifyEmailCode(c *gin.Context) {
 	var input struct {
-		Token string `json:"token" binding:"required"`
+		Email string `json:"email" binding:"required"`
+		Code  string `json:"code" binding:"required"`
 	}
-	if err := c.ShouldBindJSON(&input); err != nil || len(input.Token) < 20 {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "登录链接无效"})
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "请输入邮箱和验证码"})
 		return
 	}
-	var stored models.MagicLinkToken
-	if err := a.DB.Where("token_hash = ? AND used_at IS NULL", hashToken(input.Token)).First(&stored).Error; err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录链接无效或已使用"})
+	email := normalizeEmail(input.Email)
+	code := strings.TrimSpace(input.Code)
+	if err := validateEmail(email); err != nil || !emailCodePattern.MatchString(code) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "请输入有效的 6 位验证码"})
 		return
 	}
-	if time.Now().After(stored.ExpiresAt) {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "登录链接已过期，请重新获取"})
+
+	var record models.EmailLoginCode
+	if err := a.DB.Where("email = ? AND used_at IS NULL", email).Order("created_at DESC").First(&record).Error; err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "验证码无效或已使用"})
+		return
+	}
+	if time.Now().After(record.ExpiresAt) {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "验证码已过期，请重新获取"})
+		return
+	}
+	if record.Attempts >= 5 {
+		c.JSON(http.StatusTooManyRequests, gin.H{"code": 429, "message": "验证码错误次数过多，请重新获取"})
+		return
+	}
+	if !hmac.Equal([]byte(record.CodeHash), []byte(hashEmailCode(a.Secret, email, code))) {
+		updates := map[string]any{"attempts": gorm.Expr("attempts + 1")}
+		if record.Attempts+1 >= 5 {
+			now := time.Now()
+			updates["used_at"] = &now
+		}
+		_ = a.DB.Model(&models.EmailLoginCode{}).Where("id = ? AND used_at IS NULL", record.ID).Updates(updates).Error
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "验证码错误"})
 		return
 	}
 
 	var user models.User
 	err := a.DB.Transaction(func(tx *gorm.DB) error {
 		now := time.Now()
-		result := tx.Model(&models.MagicLinkToken{}).Where("id = ? AND used_at IS NULL", stored.ID).Update("used_at", now)
+		result := tx.Model(&models.EmailLoginCode{}).Where("id = ? AND used_at IS NULL", record.ID).Update("used_at", now)
 		if result.Error != nil {
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
-			return gorm.ErrDuplicatedKey
+			return errCodeConsumed
 		}
-		if err := tx.Where("email = ?", stored.Email).First(&user).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+		if err := tx.Where("email = ?", email).First(&user).Error; errors.Is(err, gorm.ErrRecordNotFound) {
 			if !models.BoolSetting(tx, "open_registration", true) {
 				return errRegistrationClosed
 			}
-			created, createErr := createMagicLinkUser(tx, stored.Email, input.Token)
+			created, createErr := createEmailCodeUser(tx, email)
 			if createErr != nil {
 				return createErr
 			}
@@ -177,8 +206,8 @@ func (a *AuthController) VerifyMagicLink(c *gin.Context) {
 			status, message = http.StatusForbidden, "当前已关闭公开注册，该邮箱尚未绑定账号"
 		} else if errors.Is(err, errAccountDisabled) {
 			status, message = http.StatusForbidden, "账号已被限制登录"
-		} else if errors.Is(err, gorm.ErrDuplicatedKey) {
-			status, message = http.StatusUnauthorized, "登录链接无效或已使用"
+		} else if errors.Is(err, errCodeConsumed) {
+			status, message = http.StatusUnauthorized, "验证码无效或已使用"
 		}
 		c.JSON(status, gin.H{"code": status, "message": message})
 		return
@@ -186,12 +215,7 @@ func (a *AuthController) VerifyMagicLink(c *gin.Context) {
 	a.issueSession(c, user)
 }
 
-var (
-	errRegistrationClosed = errors.New("registration closed")
-	errAccountDisabled    = errors.New("account disabled")
-)
-
-func createMagicLinkUser(db *gorm.DB, email, token string) (models.User, error) {
+func createEmailCodeUser(db *gorm.DB, email string) (models.User, error) {
 	base := emailLocalPartPattern.ReplaceAllString(strings.Split(email, "@")[0], "-")
 	base = strings.Trim(base, "-_")
 	if len(base) < 3 {
@@ -211,7 +235,11 @@ func createMagicLinkUser(db *gorm.DB, email, token string) (models.User, error) 
 		}
 		username = fmt.Sprintf("%s-%d", base, suffix)
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte("magic-link:"+token), bcrypt.DefaultCost)
+	randomPassword := make([]byte, 32)
+	if _, err := rand.Read(randomPassword); err != nil {
+		return models.User{}, err
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(base64.RawURLEncoding.EncodeToString(randomPassword)), bcrypt.DefaultCost)
 	if err != nil {
 		return models.User{}, err
 	}
@@ -222,9 +250,9 @@ func createMagicLinkUser(db *gorm.DB, email, token string) (models.User, error) 
 	return user, nil
 }
 
-func (a *AuthController) sendMagicLink(to, link string) error {
-	if a.SendMagicLink != nil {
-		return a.SendMagicLink(to, link)
+func (a *AuthController) sendEmailCode(to, code string) error {
+	if a.SendEmailCode != nil {
+		return a.SendEmailCode(to, code)
 	}
 	if a.SMTPPassword == "" {
 		return errors.New("smtp is not configured")
@@ -242,7 +270,8 @@ func (a *AuthController) sendMagicLink(to, link string) error {
 	if from == "" {
 		from = username
 	}
-	message := buildEmailMessage(from, to, "Quiet Signal 登录链接", fmt.Sprintf("你好，\n\n请点击以下链接登录 Quiet Signal：\n%s\n\n该链接 15 分钟内有效，且只能使用一次。\n如果这不是你的操作，请忽略此邮件。\n", link))
+	body := fmt.Sprintf("你好，\n\n你的 Quiet Signal 登录验证码是：%s\n\n验证码 15 分钟内有效，最多可尝试 5 次。\n如果这不是你的操作，请忽略此邮件。\n", code)
+	message := buildEmailMessage(from, to, "Quiet Signal 登录验证码", body)
 	address := net.JoinHostPort(host, fmt.Sprint(port))
 	var client *smtp.Client
 	var err error

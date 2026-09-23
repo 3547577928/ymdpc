@@ -22,13 +22,12 @@ type Config struct {
 	AdminUsername  string
 	AdminPassword  string
 	CookieSecure   bool
-	AppBaseURL     string
 	SMTPHost       string
 	SMTPPort       int
 	SMTPUsername   string
 	SMTPPassword   string
 	SMTPFrom       string
-	MagicLinkTTL   time.Duration
+	EmailCodeTTL   time.Duration
 }
 
 func Load() Config {
@@ -46,13 +45,12 @@ func Load() Config {
 		AdminUsername:  envOr("ADMIN_USERNAME", "admin"),
 		AdminPassword:  envOr("ADMIN_PASSWORD", defaultAdminPassword),
 		CookieSecure:   os.Getenv("COOKIE_SECURE") == "true",
-		AppBaseURL:     envOr("APP_BASE_URL", "http://localhost:5173"),
 		SMTPHost:       envOr("SMTP_HOST", "smtp.qq.com"),
 		SMTPPort:       IntEnv("SMTP_PORT", 465),
 		SMTPUsername:   envOr("SMTP_USERNAME", "3547577928@qq.com"),
 		SMTPPassword:   os.Getenv("SMTP_PASSWORD"),
 		SMTPFrom:       envOr("SMTP_FROM", envOr("SMTP_USERNAME", "3547577928@qq.com")),
-		MagicLinkTTL:   durationEnv("MAGIC_LINK_TTL", 15*time.Minute),
+		EmailCodeTTL:   durationEnv("EMAIL_CODE_TTL", 15*time.Minute),
 	}
 }
 

@@ -3,7 +3,6 @@ package controllers
 import (
 	"encoding/json"
 	"net/http"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -15,40 +14,35 @@ import (
 	"quietsignal/backend/models"
 )
 
-func TestMagicLinkCreatesUserAndIsSingleUse(t *testing.T) {
+func TestEmailCodeCreatesUserAndIsSingleUse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := newCommunityTestDB(t)
-	var sentLink string
+	var sentCode string
 	auth := &AuthController{
 		DB:           db,
 		Secret:       "test-secret",
-		AppBaseURL:   "http://localhost:5173",
-		MagicLinkTTL: time.Minute,
-		SendMagicLink: func(to, link string) error {
+		EmailCodeTTL: time.Minute,
+		SendEmailCode: func(to, code string) error {
 			if to != "writer@example.com" {
 				t.Fatalf("unexpected recipient: %s", to)
 			}
-			sentLink = link
+			sentCode = code
 			return nil
 		},
 	}
 
-	request := performRequest(auth.RequestMagicLink, http.MethodPost, "/api/auth/magic-link/request", `{"email":"Writer@Example.com"}`, nil)
+	request := performRequest(auth.RequestEmailCode, http.MethodPost, "/api/auth/email-code/request", `{"email":"Writer@Example.com"}`, nil)
 	if request.Code != http.StatusOK {
-		t.Fatalf("request magic link returned %d: %s", request.Code, request.Body.String())
+		t.Fatalf("request email code returned %d: %s", request.Code, request.Body.String())
 	}
-	parsed, err := url.Parse(sentLink)
-	if err != nil {
-		t.Fatal(err)
-	}
-	token := parsed.Query().Get("token")
-	if token == "" {
-		t.Fatalf("magic link did not contain token: %s", sentLink)
+	if !emailCodePattern.MatchString(sentCode) {
+		t.Fatalf("expected six digit code, got %q", sentCode)
 	}
 
-	verify := performRequest(auth.VerifyMagicLink, http.MethodPost, "/api/auth/magic-link/verify", mustJSON(t, map[string]string{"token": token}), nil)
+	verifyBody := mustJSON(t, map[string]string{"email": "writer@example.com", "code": sentCode})
+	verify := performRequest(auth.VerifyEmailCode, http.MethodPost, "/api/auth/email-code/verify", verifyBody, nil)
 	if verify.Code != http.StatusOK {
-		t.Fatalf("verify magic link returned %d: %s", verify.Code, verify.Body.String())
+		t.Fatalf("verify email code returned %d: %s", verify.Code, verify.Body.String())
 	}
 	var user models.User
 	if err := db.Where("email = ?", "writer@example.com").First(&user).Error; err != nil {
@@ -58,12 +52,44 @@ func TestMagicLinkCreatesUserAndIsSingleUse(t *testing.T) {
 		t.Fatalf("expected generated username writer, got %q", user.Username)
 	}
 	if len(verify.Result().Cookies()) == 0 || verify.Result().Cookies()[0].Name != "qs_token" {
-		t.Fatal("magic link login did not issue session cookie")
+		t.Fatal("email code login did not issue session cookie")
 	}
 
-	secondVerify := performRequest(auth.VerifyMagicLink, http.MethodPost, "/api/auth/magic-link/verify", mustJSON(t, map[string]string{"token": token}), nil)
+	secondVerify := performRequest(auth.VerifyEmailCode, http.MethodPost, "/api/auth/email-code/verify", verifyBody, nil)
 	if secondVerify.Code != http.StatusUnauthorized {
-		t.Fatalf("reused magic link returned %d: %s", secondVerify.Code, secondVerify.Body.String())
+		t.Fatalf("reused email code returned %d: %s", secondVerify.Code, secondVerify.Body.String())
+	}
+}
+
+func TestEmailCodeLocksAfterFiveFailures(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newCommunityTestDB(t)
+	var sentCode string
+	auth := &AuthController{DB: db, Secret: "test-secret", EmailCodeTTL: time.Minute, SendEmailCode: func(_, code string) error {
+		sentCode = code
+		return nil
+	}}
+	request := performRequest(auth.RequestEmailCode, http.MethodPost, "/api/auth/email-code/request", `{"email":"writer@example.com"}`, nil)
+	if request.Code != http.StatusOK {
+		t.Fatalf("request email code returned %d: %s", request.Code, request.Body.String())
+	}
+	wrongCode := "000000"
+	if sentCode == wrongCode {
+		wrongCode = "000001"
+	}
+	wrongBody := mustJSON(t, map[string]string{"email": "writer@example.com", "code": wrongCode})
+	for attempt := 0; attempt < 5; attempt++ {
+		response := performRequest(auth.VerifyEmailCode, http.MethodPost, "/api/auth/email-code/verify", wrongBody, nil)
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d returned %d: %s", attempt+1, response.Code, response.Body.String())
+		}
+	}
+	var record models.EmailLoginCode
+	if err := db.Where("email = ?", "writer@example.com").First(&record).Error; err != nil {
+		t.Fatal(err)
+	}
+	if record.Attempts != 5 || record.UsedAt == nil {
+		t.Fatalf("expected locked code after five failures, got attempts=%d usedAt=%v", record.Attempts, record.UsedAt)
 	}
 }
 

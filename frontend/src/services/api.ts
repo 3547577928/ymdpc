@@ -84,12 +84,12 @@ export function login(username: string, password: string) {
   return request<AuthUser>('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }), suppressAuthExpired: true })
 }
 
-export function requestMagicLink(email: string) {
-  return request<void>('/auth/magic-link/request', { method: 'POST', body: JSON.stringify({ email }), suppressAuthExpired: true })
+export function requestEmailCode(email: string) {
+  return request<void>('/auth/email-code/request', { method: 'POST', body: JSON.stringify({ email }), suppressAuthExpired: true })
 }
 
-export function verifyMagicLink(token: string) {
-  return request<AuthUser>('/auth/magic-link/verify', { method: 'POST', body: JSON.stringify({ token }), suppressAuthExpired: true })
+export function verifyEmailCode(email: string, code: string) {
+  return request<AuthUser>('/auth/email-code/verify', { method: 'POST', body: JSON.stringify({ email, code }), suppressAuthExpired: true })
 }
 
 export function register(username: string, password: string, nickname: string) {

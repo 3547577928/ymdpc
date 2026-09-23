@@ -18,15 +18,14 @@ type AuthController struct {
 	DB           *gorm.DB
 	Secret       string
 	CookieSecure bool
-	AppBaseURL   string
 	SMTPHost     string
 	SMTPPort     int
 	SMTPUsername string
 	SMTPPassword string
 	SMTPFrom     string
-	MagicLinkTTL time.Duration
-	// SendMagicLink 可由测试注入，生产环境为空时使用 QQ SMTP。
-	SendMagicLink func(to, link string) error
+	EmailCodeTTL time.Duration
+	// SendEmailCode 可由测试注入，生产环境为空时使用 QQ SMTP。
+	SendEmailCode func(to, code string) error
 }
 
 type AuthUserDTO struct {
