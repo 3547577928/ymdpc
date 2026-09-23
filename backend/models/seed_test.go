@@ -33,4 +33,11 @@ func TestSeedRotatesAdminPassword(t *testing.T) {
 	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte("first-password")) == nil {
 		t.Fatal("previous password is still valid")
 	}
+	var postCount int64
+	if err := db.Model(&Post{}).Count(&postCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if postCount != 0 {
+		t.Fatalf("expected no demo posts to be seeded, got %d", postCount)
+	}
 }

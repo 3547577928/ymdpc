@@ -286,7 +286,7 @@ export function getAdminTags() {
 }
 
 export function createCategory(name: string) {
-  return request<Category>('/admin/categories', { method: 'POST', body: JSON.stringify({ name }) })
+  return request<Category>('/categories', { method: 'POST', body: JSON.stringify({ name }) })
 }
 
 export function deleteCategory(id: number) {

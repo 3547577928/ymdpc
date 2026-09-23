@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { MarkdownContent } from '../components/MarkdownContent'
 import { ImageUploadField } from '../components/ImageUploadField'
+import { MarkdownImportButton } from '../components/MarkdownImportButton'
+import { CategoryField } from '../components/CategoryField'
 import { ConfirmDialog } from '../components/Dialog'
 import { createUserPost, getCategories, getCurrentUser, getPostById, getPostRevisions, restorePostRevision, updateUserPost, type PostInput } from '../services/api'
 import type { Category, Post, PostRevision } from '../types'
@@ -122,6 +124,13 @@ export function WritePage() {
     setDraft({ title: post.title, slug: post.slug, summary: post.summary, content: post.content, coverImage: post.coverImage, tags: post.tags, status: post.status, featured: post.featured, categoryId: post.category?.id ?? null, scheduledAt: post.scheduledAt ?? null })
   }
 
+  const importMarkdown = (document: { content: string; title: string }) => {
+    setDraft((current) => ({ ...current, content: document.content, title: current.title.trim() ? current.title : document.title }))
+    setMode('preview')
+    setAutosaveText('已导入 Markdown')
+    setError('')
+  }
+
   const restoreRevision = async () => {
     if (!editingID || !revisionToRestore) return
     setSaving(true)
@@ -143,10 +152,10 @@ export function WritePage() {
     <div className="write-topbar">
       <Link className="back-link" to="/"><ArrowLeft size={15} /> 返回社区</Link>
       <div className="editor-status"><FileClock size={14} /><span>{autosaveText}</span></div>
-      <div className="editor-mode" role="tablist" aria-label="编辑器模式">
+      <div className="editor-tools"><MarkdownImportButton onImport={importMarkdown} onError={setError} /><div className="editor-mode" role="tablist" aria-label="编辑器模式">
         <button type="button" className={mode === 'write' ? 'is-active' : ''} onClick={() => setMode('write')}><PenLine size={14} /> 编辑</button>
         <button type="button" className={mode === 'preview' ? 'is-active' : ''} onClick={() => setMode('preview')}><Eye size={14} /> 预览</button>
-      </div>
+      </div></div>
     </div>
     {recovery && <div className="draft-recovery"><div><RotateCcw size={17} /><span><strong>发现本地草稿</strong><small>{new Date(recovery.savedAt).toLocaleString()} 自动保存</small></span></div><div><button type="button" className="button button-light" onClick={discardLocalDraft}>忽略</button><button type="button" className="button button-dark" onClick={restoreLocalDraft}>恢复草稿</button></div></div>}
     <form className="write-layout" onSubmit={submit}>
@@ -162,7 +171,7 @@ export function WritePage() {
         <div className="editor-counts"><span>{draft.content.trim() ? draft.content.trim().split(/\s+/).length : 0} 词</span><span>{draft.content.length} 字符</span></div>
         <label>链接标识<input value={draft.slug} onChange={(event) => setDraft({ ...draft, slug: event.target.value })} placeholder="留空自动生成" /></label>
         <label>标签<input value={draft.tags.join(', ')} onChange={(event) => setDraft({ ...draft, tags: event.target.value.split(',').map((tag) => tag.trim()).filter(Boolean) })} placeholder="设计, 工程" /></label>
-        <label>分类<select value={draft.categoryId ?? ''} onChange={(event) => setDraft({ ...draft, categoryId: event.target.value ? Number(event.target.value) : null })}><option value="">不设分类</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
+        <div className="write-field"><span>分类</span><CategoryField categories={categories} value={draft.categoryId} onChange={(categoryId) => setDraft({ ...draft, categoryId })} onError={setError} /></div>
         <label>计划发布时间<input type="datetime-local" min={dateTimeLocalValue(new Date().toISOString())} value={dateTimeLocalValue(draft.scheduledAt)} onChange={(event) => setDraft({ ...draft, scheduledAt: event.target.value ? new Date(event.target.value).toISOString() : null })} /></label>
         <label>封面图片<ImageUploadField value={draft.coverImage} onChange={(coverImage) => setDraft({ ...draft, coverImage })} /></label>
         {editingID && <div className="revision-panel"><div className="revision-heading"><span><History size={14} /> 版本历史</span><small>最近 {revisions.length} 个版本</small></div>{revisions.length ? <div className="revision-list">{revisions.map((revision) => <button type="button" key={revision.id} onClick={() => setRevisionToRestore(revision)}><strong>{revision.title}</strong><small>{new Date(revision.createdAt).toLocaleString()}</small></button>)}</div> : <p>保存修改后会在这里生成历史版本。</p>}</div>}

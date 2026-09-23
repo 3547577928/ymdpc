@@ -42,6 +42,7 @@ func Register(r *gin.Engine, deps Dependencies) {
 	api.POST("/reports", writeLimit, middleware.RequireAuth(deps.Secret, deps.DB), deps.Interactions.CreateReport)
 	api.POST("/uploads/images", writeLimit, middleware.RequireAuth(deps.Secret, deps.DB), deps.Uploads.Image)
 	api.GET("/categories", deps.Interactions.ListCategories)
+	api.POST("/categories", writeLimit, middleware.RequireAuth(deps.Secret, deps.DB), deps.Interactions.CreateCategory)
 	api.GET("/feed", middleware.OptionalAuth(deps.Secret, deps.DB), deps.Community.Feed)
 	api.GET("/users/:username", middleware.OptionalAuth(deps.Secret, deps.DB), deps.Community.Profile)
 	api.POST("/users/:id/follow", writeLimit, middleware.RequireAuth(deps.Secret, deps.DB), deps.Community.FollowUser)

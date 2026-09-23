@@ -659,7 +659,7 @@ func (ic *InteractionController) AdminTags(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"tags": tagItems, "categories": categoryItems}})
 }
 
-// CreateCategory 管理员创建分类
+// CreateCategory 登录用户创建分类，作者可以在编辑文章时即时创建并选择分类
 func (ic *InteractionController) CreateCategory(c *gin.Context) {
 	var input struct {
 		Name string `json:"name" binding:"required"`
@@ -669,6 +669,15 @@ func (ic *InteractionController) CreateCategory(c *gin.Context) {
 		return
 	}
 	name := strings.TrimSpace(input.Name)
+	if len(name) > 80 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "分类名称不能超过 80 个字符"})
+		return
+	}
+	var user models.User
+	if err := ic.DB.Select("status").First(&user, currentUserID(c)).Error; err != nil || user.Status != "active" {
+		c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "当前账号不能创建分类"})
+		return
+	}
 	var count int64
 	if err := ic.DB.Model(&models.Category{}).Where("name = ?", name).Count(&count).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "检查分类失败"})
