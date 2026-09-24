@@ -41,12 +41,13 @@ export function NotificationsPage() {
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [filter, setFilter] = useState<'all' | 'unread' | NotificationItem['type']>('all')
   const pageSize = 20
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const data = await getNotifications({ page, pageSize })
+      const data = await getNotifications({ page, pageSize, type: filter === 'all' || filter === 'unread' ? undefined : filter, unread: filter === 'unread' })
       setItems(groupNotificationItems(data.items))
       setUnread(data.unread)
       setTotal(data.total)
@@ -55,7 +56,7 @@ export function NotificationsPage() {
     } finally {
       setLoading(false)
     }
-  }, [page])
+  }, [filter, page])
 
   const markAllRead = async () => {
     try {
@@ -70,6 +71,11 @@ export function NotificationsPage() {
   useEffect(() => {
     void load()
   }, [load])
+
+  const changeFilter = (next: typeof filter) => {
+    setFilter(next)
+    setPage(1)
+  }
 
   // 点击通知：标记已读并跳转到对应内容
   const open = async (item: NotificationItem) => {
@@ -87,6 +93,7 @@ export function NotificationsPage() {
     <div className="write-topbar"><Link className="back-link" to="/"><ArrowLeft size={15} /> 返回社区</Link><span className="eyebrow">Notifications</span></div>
     <div className="notifications-heading"><h1>通知中心 {unread > 0 && <small className="unread-badge">{unread} 条未读</small>}</h1>{unread > 0 && <button className="text-button" onClick={() => void markAllRead()}><CheckCheck size={15} /> 全部已读</button>}</div>
     {error && <div className="form-error">{error}</div>}
+    <div className="notification-filters">{[['all', '全部'], ['unread', '未读'], ['comment', '评论'], ['reply', '回复'], ['like', '点赞'], ['follow', '关注'], ['post', '作者更新']].map(([value, label]) => <button key={value} className={filter === value ? 'is-active' : ''} onClick={() => changeFilter(value as typeof filter)}>{label}</button>)}</div>
     {loading ? <div className="page-state"><h1>正在读取。</h1></div> : items.length ? <div className="notifications-list">
       {items.map((item) => {
         const meta = typeMeta[item.type]
@@ -102,7 +109,7 @@ export function NotificationsPage() {
           </button>
         )
       })}
-    </div> : <div className="empty-state comments-empty"><h2>还没有通知</h2><p>关注、互动和作者更新会出现在这里。</p></div>}
+    </div> : <div className="empty-state comments-empty"><h2>{filter === 'unread' ? '没有未读通知' : '还没有通知'}</h2><p>关注、互动和作者更新会出现在这里。</p></div>}
     {totalPages > 1 && <div className="admin-pagination"><button className="icon-button" disabled={page === 1} onClick={() => setPage((current) => current - 1)}>上一页</button><span>{page} / {totalPages}</span><button className="icon-button" disabled={page >= totalPages} onClick={() => setPage((current) => current + 1)}>下一页</button></div>}
   </section>
 }

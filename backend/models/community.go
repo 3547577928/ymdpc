@@ -43,15 +43,19 @@ type Notification struct {
 
 // Report 举报，TargetType 为 post 或 comment，Status 为 pending/handled/dismissed
 type Report struct {
-	ID         uint      `json:"id" gorm:"primaryKey"`
-	ReporterID uint      `json:"reporterId" gorm:"index;not null"`
-	Reporter   User      `json:"reporter" gorm:"foreignKey:ReporterID"`
-	TargetType string    `json:"targetType" gorm:"size:20;index;not null"`
-	TargetID   uint      `json:"targetId" gorm:"index;not null"`
-	Reason     string    `json:"reason" gorm:"size:500;not null"`
-	Status     string    `json:"status" gorm:"size:20;index;not null;default:pending"`
-	HandledBy  *uint     `json:"handledBy"`
-	CreatedAt  time.Time `json:"createdAt"`
+	ID         uint       `json:"id" gorm:"primaryKey"`
+	ReporterID uint       `json:"reporterId" gorm:"index;not null"`
+	Reporter   User       `json:"reporter" gorm:"foreignKey:ReporterID"`
+	TargetType string     `json:"targetType" gorm:"size:20;index;not null"`
+	TargetID   uint       `json:"targetId" gorm:"index;not null"`
+	Reason     string     `json:"reason" gorm:"size:500;not null"`
+	Status     string     `json:"status" gorm:"size:20;index;not null;default:pending"`
+	HandledBy  *uint      `json:"handledBy" gorm:"index"`
+	Handler    *User      `json:"handler,omitempty" gorm:"foreignKey:HandledBy"`
+	HandledAt  *time.Time `json:"handledAt" gorm:"index"`
+	Resolution string     `json:"resolution" gorm:"size:500"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	UpdatedAt  time.Time  `json:"updatedAt"`
 }
 
 // AdminLog 管理操作日志，记录封禁、删除、下架等操作

@@ -1,8 +1,8 @@
-import { ChevronLeft, ChevronRight, Eye, EyeOff, Flag, History, MessageSquare, Pencil, Plus, Settings, Tag, Trash2, UserRound } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, Eye, EyeOff, Flag, History, MessageSquare, Pencil, Plus, Settings, Tag, Trash2, UserRound, X } from 'lucide-react'
 import type { Dispatch, SetStateAction } from 'react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { AdminSettings, AdminStats, AdminUser } from '../../services/api'
+import { getAdminReport, type AdminSettings, type AdminStats, type AdminUser } from '../../services/api'
 import type { AdminComment, AdminLogEntry, AdminReport, PostStatus, PostSummary, TagUsage } from '../../types'
 import { formatDate } from '../../utils'
 
@@ -52,8 +52,9 @@ type AdminContentProps = {
   reportLoading: boolean
   onReportStatusChange: (status: string) => void
   onReportPageChange: (page: number) => void
-  onReport: (report: AdminReport, status: 'handled' | 'dismissed') => void
-  onReportsBatch?: (ids: number[], status: 'handled' | 'dismissed') => void
+  onReport: (report: AdminReport, status: 'handled' | 'dismissed', resolution?: string) => void
+  onReportsBatch?: (ids: number[], status: 'handled' | 'dismissed', resolution?: string) => void
+  onExport: (type: 'posts' | 'users' | 'reports') => void
   logs: AdminLogEntry[]
   logTotal: number
   logPage: number
@@ -146,7 +147,8 @@ function CommentContent({ props }: { props: AdminContentProps }) {
   </>
 }
 
-function OverviewContent({ stats }: { stats: AdminStats }) {
+function OverviewContent({ stats, onExport }: { stats: AdminStats; onExport: AdminContentProps['onExport'] }) {
+  const maxMetric = Math.max(1, ...stats.dailyMetrics.flatMap((item) => [item.users, item.posts, item.comments]))
   return <>
     <div className="admin-stats">
       <div><span>注册用户</span><strong>{stats.users.toLocaleString()}</strong><small>今日 +{stats.todayUsers}</small></div>
@@ -155,6 +157,12 @@ function OverviewContent({ stats }: { stats: AdminStats }) {
       <div><span>总阅读</span><strong>{stats.views.toLocaleString()}</strong><small>累计访问</small></div>
       <div><span>总点赞</span><strong>{stats.likes.toLocaleString()}</strong><small>文章获赞</small></div>
       <div><span>关注关系</span><strong>{stats.follows.toLocaleString()}</strong><small>用户关注</small></div>
+      <div><span>待处理举报</span><strong>{stats.pendingReports.toLocaleString()}</strong><small>需要审核</small></div>
+    </div>
+    <div className="admin-overview-actions"><span>数据导出</span><button className="button button-light" onClick={() => onExport('posts')}><Download size={14} />文章 CSV</button><button className="button button-light" onClick={() => onExport('users')}><Download size={14} />用户 CSV</button><button className="button button-light" onClick={() => onExport('reports')}><Download size={14} />举报 CSV</button></div>
+    <div className="admin-overview-grid">
+      <div className="admin-panel"><div className="admin-panel-heading"><div><span className="eyebrow">Last 14 days</span><h2>社区增长</h2></div><small>用户 / 文章 / 评论</small></div><div className="admin-chart">{stats.dailyMetrics.map((item) => <div className="admin-chart-day" key={item.date}><div className="admin-chart-bars"><i className="chart-users" style={{ height: `${Math.max(3, item.users / maxMetric * 100)}%` }} /><i className="chart-posts" style={{ height: `${Math.max(3, item.posts / maxMetric * 100)}%` }} /><i className="chart-comments" style={{ height: `${Math.max(3, item.comments / maxMetric * 100)}%` }} /></div><small>{item.date.slice(5)}</small></div>)}</div></div>
+      <div className="admin-panel"><div className="admin-panel-heading"><div><span className="eyebrow">Top posts</span><h2>热门文章</h2></div><small>按阅读与互动排序</small></div><div className="admin-top-posts">{stats.topPosts.length ? stats.topPosts.map((post, index) => <Link to={`/posts/${post.slug}`} className="admin-top-post" key={post.id}><strong>{String(index + 1).padStart(2, '0')}</strong><span><b>{post.title}</b><small>@{post.author.nickname} · {post.views} 阅读 · {post.likesCount} 赞</small></span></Link>) : <p className="muted-copy">还没有足够的公开文章数据。</p>}</div></div>
     </div>
     <div className="admin-table"><div className="table-head"><span>活跃用户</span><span>近 7 天发文</span><span>近 7 天评论</span><span>操作</span></div>{stats.activeUsers.map((item) => <div className="table-row" key={item.user.id}><div className="table-title"><UserRound size={16} /><span><strong>{item.user.nickname}</strong><small>@{item.user.username}</small></span></div><span>{item.postCount} 篇</span><span>{item.commentCount} 条</span><span><Link to={`/users/${item.user.username}`}>查看主页</Link></span></div>)}</div>
   </>
@@ -171,13 +179,28 @@ function TagContent({ props }: { props: AdminContentProps }) {
 function ReportContent({ props }: { props: AdminContentProps }) {
   const { reports, reportStatus, reportTotal, reportPage, reportLoading, onReportStatusChange, onReportPageChange, onReport, onReportsBatch } = props
   const [selected, setSelected] = useState<number[]>([])
+  const [detail, setDetail] = useState<AdminReport>()
+  const [resolution, setResolution] = useState('')
+  const [detailLoading, setDetailLoading] = useState(false)
   const toggle = (id: number) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])
   const selectAll = () => setSelected(selected.length === reports.length ? [] : reports.map((report) => report.id))
+  const openDetail = async (report: AdminReport) => {
+    setDetail(report)
+    setResolution(report.resolution ?? '')
+    setDetailLoading(true)
+    try { setDetail(await getAdminReport(report.id)) } catch { /* 列表数据足够展示时保留现有内容 */ } finally { setDetailLoading(false) }
+  }
+  const submitDetail = (status: 'handled' | 'dismissed') => {
+    if (!detail) return
+    onReport(detail, status, resolution)
+    setDetail(undefined)
+  }
   return <>
     <div className="feed-tabs report-tabs">{['pending', 'handled', 'dismissed'].map((status) => <button key={status} className={reportStatus === status ? 'is-active' : ''} onClick={() => onReportStatusChange(status)}>{reportStatusLabels[status]}</button>)}</div>
     {selected.length > 0 && onReportsBatch && <div className="batch-toolbar"><span>已选择 {selected.length} 条</span><button className="button button-light" onClick={() => { onReportsBatch(selected, 'handled'); setSelected([]) }}>批量处理</button><button className="button button-light" onClick={() => { onReportsBatch(selected, 'dismissed'); setSelected([]) }}>批量驳回</button></div>}
-    <div className={`admin-table has-selection ${reportLoading ? 'is-loading' : ''}`}><div className="table-head"><button className="table-select-all" onClick={selectAll} aria-label="全选举报"><input type="checkbox" checked={reports.length > 0 && selected.length === reports.length} readOnly /></button><span>举报理由</span><span>举报目标</span><span>状态</span><span>操作</span></div>{reports.length ? reports.map((report) => <div className="table-row" key={report.id}><label className="table-select"><input type="checkbox" checked={selected.includes(report.id)} onChange={() => toggle(report.id)} aria-label={`选择举报 ${report.id}`} /></label><div className="table-title"><Flag size={16} /><span><strong>{report.reason}</strong><small>@{report.reporter.username} · {formatDate(report.createdAt)}</small></span></div><span>{report.targetSummary}</span><span className="status-dot"><i className={report.status === 'pending' ? 'is-draft' : 'is-archived'} /> {reportStatusLabels[report.status]}</span><div className="table-actions">{report.status === 'pending' && <><button className="icon-button" onClick={() => onReport(report, 'handled')}>已处理</button><button className="icon-button" onClick={() => onReport(report, 'dismissed')}>驳回</button></>}</div></div>) : <div className="table-row"><span>当前没有{reportStatusLabels[reportStatus]}的举报。</span><span /><span /><span /><span /></div>}</div>
+    <div className={`admin-table has-selection ${reportLoading ? 'is-loading' : ''}`}><div className="table-head"><button className="table-select-all" onClick={selectAll} aria-label="全选举报"><input type="checkbox" checked={reports.length > 0 && selected.length === reports.length} readOnly /></button><span>举报理由</span><span>举报目标</span><span>状态</span><span>操作</span></div>{reports.length ? reports.map((report) => <div className="table-row" key={report.id}><label className="table-select"><input type="checkbox" checked={selected.includes(report.id)} onChange={() => toggle(report.id)} aria-label={`选择举报 ${report.id}`} /></label><button className="table-title table-title-button" onClick={() => void openDetail(report)}><Flag size={16} /><span><strong>{report.reason}</strong><small>@{report.reporter.username} · {formatDate(report.createdAt)}</small></span></button><button className="status-button context-link" onClick={() => void openDetail(report)}>{report.targetSummary}</button><span className="status-dot"><i className={report.status === 'pending' ? 'is-draft' : 'is-archived'} /> {reportStatusLabels[report.status]}</span><div className="table-actions">{report.status === 'pending' && <><button className="icon-button" onClick={() => onReport(report, 'handled')}>已处理</button><button className="icon-button" onClick={() => onReport(report, 'dismissed')}>驳回</button></>}</div></div>) : <div className="table-row"><span>当前没有{reportStatusLabels[reportStatus]}的举报。</span><span /><span /><span /><span /></div>}</div>
     <Pagination page={reportPage} total={Math.max(1, Math.ceil(reportTotal / 20))} onChange={onReportPageChange} />
+    {detail && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setDetail(undefined) }}><div className="dialog-modal report-detail-modal"><div className="dialog-head"><div><span className="eyebrow">Report #{detail.id}</span><h2>举报详情</h2></div><button className="icon-button" onClick={() => setDetail(undefined)} aria-label="关闭举报详情"><X size={17} /></button></div><div className="report-detail-grid"><div><span>举报人</span><strong>@{detail.reporter.username}</strong></div><div><span>提交时间</span><strong>{formatDate(detail.createdAt)}</strong></div><div><span>举报目标</span><strong>{detail.targetTitle || detail.targetSummary}</strong></div><div><span>目标状态</span><strong>{detail.targetStatus || '未知'}</strong></div></div><p className="report-detail-reason">{detail.reason}</p>{detail.resolution && <p className="report-detail-resolution">处理说明：{detail.resolution}</p>}{detailLoading && <p className="muted-copy">正在读取目标上下文。</p>}{detail.status === 'pending' && <><label className="report-resolution-label">处理说明<textarea value={resolution} onChange={(event) => setResolution(event.target.value)} maxLength={500} placeholder="记录处理依据或后续动作（可选）" /></label><div className="dialog-actions"><button className="button button-light" onClick={() => submitDetail('dismissed')}>驳回举报</button><button className="button button-dark" onClick={() => submitDetail('handled')}>确认处理</button></div></>}</div></div>}
   </>
 }
 
@@ -198,7 +221,7 @@ export function AdminContent(props: AdminContentProps) {
     case '文章': return <PostContent props={props} />
     case '用户': return <UserContent props={props} />
     case '评论': return <CommentContent props={props} />
-    case '概览': return <OverviewContent stats={props.stats} />
+    case '概览': return <OverviewContent stats={props.stats} onExport={props.onExport} />
     case '标签': return <TagContent props={props} />
     case '举报': return <ReportContent props={props} />
     case '日志': return <LogContent props={props} />

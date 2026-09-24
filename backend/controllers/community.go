@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -86,6 +87,9 @@ func (cc *CommunityController) Feed(c *gin.Context) {
 		query = query.Where("EXISTS (SELECT 1 FROM categories cat WHERE cat.id = posts.category_id AND (cat.name = ? OR cat.slug = ?))", category, category)
 	}
 	mode := strings.TrimSpace(c.DefaultQuery("mode", "latest"))
+	if mode != "latest" && mode != "hot" && mode != "following" && mode != "recommended" {
+		mode = "latest"
+	}
 	if mode == "following" {
 		userID := currentUserID(c)
 		if userID == 0 {
@@ -98,6 +102,32 @@ func (cc *CommunityController) Feed(c *gin.Context) {
 	if mode == "hot" {
 		// 热度按阅读、点赞、评论综合计算，并按发布时长做时间衰减
 		order = "((posts.likes_count * 4 + posts.comments_count * 6 + posts.views / 100.0) / max((julianday('now') - julianday(posts.published_at)) * 24.0, 2.0)) DESC, posts.published_at DESC, posts.id DESC"
+	}
+	if mode == "recommended" {
+		userID := currentUserID(c)
+		if userID == 0 {
+			order = "((posts.likes_count * 4 + posts.comments_count * 6 + posts.views / 100.0) / max((julianday('now') - julianday(posts.published_at)) * 24.0, 2.0)) DESC, posts.published_at DESC, posts.id DESC"
+		} else {
+			// 推荐分由关注作者、用户点赞/收藏过的标签与分类、文章互动量组成。
+			// userID 来自已解析的 JWT 数字，不包含用户输入，直接拼入固定 SQL 是 SQLite
+			// 当前最兼容的写法，也避免为每篇文章加载推荐数据造成 N+1 查询。
+			order = fmt.Sprintf(`(
+				CASE WHEN posts.author_id IN (SELECT following_id FROM follows WHERE follower_id = %d) THEN 40 ELSE 0 END +
+				(SELECT COUNT(*) * 8 FROM post_tags rec_pt WHERE rec_pt.post_id = posts.id AND rec_pt.tag_id IN (
+					SELECT pt.tag_id FROM post_tags pt WHERE pt.post_id IN (
+						SELECT pl.post_id FROM post_likes pl WHERE pl.user_id = %d
+						UNION SELECT fa.post_id FROM favorites fa WHERE fa.user_id = %d
+					)
+				)) +
+				CASE WHEN posts.category_id IS NOT NULL AND posts.category_id IN (
+					SELECT p.category_id FROM posts p WHERE p.id IN (
+						SELECT pl.post_id FROM post_likes pl WHERE pl.user_id = %d
+						UNION SELECT fa.post_id FROM favorites fa WHERE fa.user_id = %d
+					) AND p.category_id IS NOT NULL
+				) THEN 12 ELSE 0 END +
+				posts.likes_count * 2 + posts.comments_count * 3 + posts.favorite_count * 2 + posts.views / 100.0
+			) / max((julianday('now') - julianday(posts.published_at)) * 24.0, 2.0) DESC, posts.published_at DESC, posts.id DESC`, userID, userID, userID, userID, userID)
+		}
 	}
 	var total int64
 	if err := query.Count(&total).Error; err != nil {

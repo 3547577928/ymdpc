@@ -155,6 +155,27 @@ func TestCommentLikeAndNotificationFlow(t *testing.T) {
 	}
 }
 
+func TestNotificationFilters(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newInteractionTestDB(t)
+	users := []models.User{{Username: "owner", Nickname: "Owner", Role: "user", Status: "active"}, {Username: "actor", Nickname: "Actor", Role: "user", Status: "active"}}
+	if err := db.Create(&users).Error; err != nil {
+		t.Fatal(err)
+	}
+	readAt := time.Now()
+	if err := db.Create(&[]models.Notification{
+		{UserID: users[0].ID, ActorID: users[1].ID, Type: "like", ResourceID: 1},
+		{UserID: users[0].ID, ActorID: users[1].ID, Type: "comment", ResourceID: 1, ReadAt: &readAt},
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	ic := &InteractionController{DB: db}
+	response := authenticatedRequest(ic.Notifications, http.MethodGet, "/api/notifications?type=like&unread=1", "", nil, users[0].ID, "user")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"total":1`) || !strings.Contains(response.Body.String(), `"unread":1`) {
+		t.Fatalf("unexpected filtered notifications: %d %s", response.Code, response.Body.String())
+	}
+}
+
 // TestReportFlow 验证举报提交、管理端处理与管理日志
 func TestReportFlow(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -183,7 +204,11 @@ func TestReportFlow(t *testing.T) {
 	if adminList.Code != http.StatusOK || !strings.Contains(adminList.Body.String(), "spam content") {
 		t.Fatalf("admin reports unexpected: %d %s", adminList.Code, adminList.Body.String())
 	}
-	handle := authenticatedRequest(ic.AdminHandleReport, http.MethodPatch, "/api/admin/reports/1", `{"status":"handled"}`, gin.Params{{Key: "id", Value: "1"}}, users[0].ID, "admin")
+	detail := authenticatedRequest(ic.AdminReportDetail, http.MethodGet, "/api/admin/reports/1", "", gin.Params{{Key: "id", Value: "1"}}, users[0].ID, "admin")
+	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), "Bad post") {
+		t.Fatalf("unexpected report detail: %d %s", detail.Code, detail.Body.String())
+	}
+	handle := authenticatedRequest(ic.AdminHandleReport, http.MethodPatch, "/api/admin/reports/1", `{"status":"handled","resolution":"确认后下架"}`, gin.Params{{Key: "id", Value: "1"}}, users[0].ID, "admin")
 	if handle.Code != http.StatusOK {
 		t.Fatalf("handle returned %d: %s", handle.Code, handle.Body.String())
 	}
@@ -191,6 +216,34 @@ func TestReportFlow(t *testing.T) {
 	db.Model(&models.AdminLog{}).Where("action = ?", "report.handled").Count(&logCount)
 	if logCount != 1 {
 		t.Fatalf("expected one admin log, got %d", logCount)
+	}
+	var stored models.Report
+	if err := db.First(&stored, 1).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.HandledBy == nil || *stored.HandledBy != users[0].ID || stored.HandledAt == nil || stored.Resolution != "确认后下架" {
+		t.Fatalf("report handling metadata missing: %#v", stored)
+	}
+}
+
+func TestAdminExport(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newInteractionTestDB(t)
+	user := models.User{Username: "export-user", Nickname: "Export User", Role: "user", Status: "active"}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&models.Post{AuthorID: user.ID, Title: "Export post", Slug: "export-post", Content: "body", Status: "published", ModerationStatus: "normal"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	ic := &InteractionController{DB: db}
+	response := authenticatedRequest(ic.AdminExport, http.MethodGet, "/api/admin/export?type=posts", "", nil, user.ID, "admin")
+	if response.Code != http.StatusOK || !strings.Contains(response.Header().Get("Content-Type"), "text/csv") || !strings.Contains(response.Body.String(), "Export post") {
+		t.Fatalf("unexpected export: %d %s", response.Code, response.Body.String())
+	}
+	bad := authenticatedRequest(ic.AdminExport, http.MethodGet, "/api/admin/export?type=unknown", "", nil, user.ID, "admin")
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("invalid export type returned %d", bad.Code)
 	}
 }
 

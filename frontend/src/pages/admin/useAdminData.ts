@@ -4,7 +4,7 @@ import type { AdminComment, AdminLogEntry, AdminReport, PostSummary, TagUsage } 
 
 const pageSize = 20
 
-const emptyStats: AdminStats = { total: 0, users: 0, posts: 0, published: 0, views: 0, likes: 0, comments: 0, follows: 0, todayUsers: 0, todayPosts: 0, todayComments: 0, activeUsers: [] }
+const emptyStats: AdminStats = { total: 0, users: 0, posts: 0, published: 0, views: 0, likes: 0, comments: 0, follows: 0, todayUsers: 0, todayPosts: 0, todayComments: 0, pendingReports: 0, activeUsers: [], dailyMetrics: [], topPosts: [] }
 const emptySettings: AdminSettings = { openRegistration: true, commentsEnabled: true }
 
 type SetError = (message: string) => void

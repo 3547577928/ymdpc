@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { PostCard } from '../components/PostCard'
-import { getCategories, getFeed, getTags } from '../services/api'
+import { getCategories, getFeed, getTags, getTrendingTags } from '../services/api'
 import type { Category, PostSummary } from '../types'
 import { formatDate } from '../utils'
 
@@ -42,8 +42,8 @@ export function PostsPage() {
   }, [params, query, queryInput, setParams])
 
   useEffect(() => {
-    Promise.all([getTags(), getCategories()]).then(([tags, categoryItems]) => {
-      setAllTags(tags.map((tag) => tag.name))
+    Promise.all([getTags(), getCategories(), getTrendingTags({ limit: 20 })]).then(([tags, categoryItems, trending]) => {
+      setAllTags(trending.length ? trending.map((tag) => tag.name) : tags.map((tag) => tag.name))
       setCategories(categoryItems)
     }).catch((reason: Error) => setError(reason.message))
     getFeed({ mode: 'hot', pageSize: 5 }).then((data) => setRankingPosts(data.items)).catch(() => setRankingPosts([]))
@@ -104,13 +104,13 @@ export function PostsPage() {
   return (
     <section className="container archive-page">
       <div className="archive-header">
-        <div><div className="eyebrow">Community / {currentYear}</div><h1>{mode === 'hot' ? '热门讨论' : mode === 'following' ? '关注动态' : '社区文章'}</h1><p>{mode === 'following' ? '只看你关注的作者，按发布时间展示最新更新。' : '阅读、写作和讨论都从这里开始。'}</p></div>
+        <div><div className="eyebrow">Community / {currentYear}</div><h1>{mode === 'hot' ? '热门讨论' : mode === 'following' ? '关注动态' : mode === 'recommended' ? '为你推荐' : '社区文章'}</h1><p>{mode === 'following' ? '只看你关注的作者，按发布时间展示最新更新。' : mode === 'recommended' ? '结合你的关注、收藏和互动偏好，筛选值得继续阅读的文章。' : '阅读、写作和讨论都从这里开始。'}</p></div>
         <div className="archive-count"><strong>{String(total).padStart(2, '0')}</strong><span>{mode === 'following' ? '篇关注更新' : '篇公开文章'}</span></div>
       </div>
 
       <div className="archive-toolbar">
         <label className="search-box"><Search size={17} /><input value={queryInput} onChange={(event) => setQueryInput(event.target.value)} placeholder="搜索标题或关键词" /></label>
-        <div className="feed-tabs"><Link className={mode === 'latest' ? 'is-active' : ''} to={`/posts?${new URLSearchParams({ ...Object.fromEntries(params), mode: 'latest' })}`}>最新</Link><Link className={mode === 'hot' ? 'is-active' : ''} to={`/posts?${new URLSearchParams({ ...Object.fromEntries(params), mode: 'hot' })}`}>热门</Link>{mode === 'following' && <Link className="is-active" to="/posts?mode=following">关注</Link>}</div>
+        <div className="feed-tabs"><Link className={mode === 'latest' ? 'is-active' : ''} to={`/posts?${new URLSearchParams({ ...Object.fromEntries(params), mode: 'latest' })}`}>最新</Link><Link className={mode === 'hot' ? 'is-active' : ''} to={`/posts?${new URLSearchParams({ ...Object.fromEntries(params), mode: 'hot' })}`}>热门</Link><Link className={mode === 'recommended' ? 'is-active' : ''} to={`/posts?${new URLSearchParams({ ...Object.fromEntries(params), mode: 'recommended' })}`}>推荐</Link>{mode === 'following' && <Link className="is-active" to="/posts?mode=following">关注</Link>}</div>
       </div>
       <div className="toolbar-label"><SlidersHorizontal size={15} /> 分类</div>
       <div className="filter-row filter-row-compact">

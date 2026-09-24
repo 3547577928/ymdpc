@@ -11,7 +11,10 @@ export type PostPage = { items: PostSummary[]; total: number; page: number; page
 export type PostInput = Pick<Post, 'title' | 'summary' | 'content' | 'coverImage' | 'tags' | 'status' | 'featured'> & { slug?: string; categoryId?: number | null; scheduledAt?: string | null }
 export type AdjacentPost = Pick<PostSummary, 'title' | 'slug'>
 export type PostDetail = { post: Post; previous: AdjacentPost | null; next: AdjacentPost | null }
-export type AdminStats = { total: number; users: number; posts: number; published: number; views: number; likes: number; comments: number; follows: number; todayUsers: number; todayPosts: number; todayComments: number; activeUsers: { user: UserSummary; postCount: number; commentCount: number }[] }
+export type AdminDailyMetric = { date: string; users: number; posts: number; comments: number }
+export type AdminTopPost = { id: number; title: string; slug: string; views: number; likesCount: number; commentsCount: number; author: UserSummary }
+export type AdminStats = { total: number; users: number; posts: number; published: number; views: number; likes: number; comments: number; follows: number; todayUsers: number; todayPosts: number; todayComments: number; pendingReports: number; activeUsers: { user: UserSummary; postCount: number; commentCount: number }[]; dailyMetrics: AdminDailyMetric[]; topPosts: AdminTopPost[] }
+export type TrendingTag = { id: number; name: string; slug: string; postCount: number; score: number }
 export type FeedPage = PostPage & { mode: string }
 export type UserProfile = { user: UserSummary; posts: PostSummary[]; postCount: number; likeCount: number; followers: number; following: number; followingMe: boolean }
 export type AdminUser = UserSummary & { status: string; postCount: number; likeCount: number; followers: number; following: number }
@@ -174,7 +177,7 @@ export function createReport(input: { targetType: 'post' | 'comment'; targetId: 
   return request<void>('/reports', { method: 'POST', body: JSON.stringify(input) })
 }
 
-export function getNotifications(params: { page?: number; pageSize?: number } = {}) {
+export function getNotifications(params: { page?: number; pageSize?: number; type?: NotificationItem['type']; unread?: boolean } = {}) {
   const query = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => { if (value) query.set(key, String(value)) })
   return request<{ items: NotificationItem[]; total: number; unread: number; page: number; pageSize: number }>(`/notifications${query.size ? `?${query}` : ''}`)
@@ -218,6 +221,12 @@ export function restorePostRevision(id: number, revisionId: number) {
 
 export function getCategories() {
   return request<Category[]>('/categories')
+}
+
+export function getTrendingTags(params: { days?: number; limit?: number } = {}) {
+  const query = new URLSearchParams()
+  Object.entries(params).forEach(([key, value]) => { if (value) query.set(key, String(value)) })
+  return request<TrendingTag[]>(`/trending/tags${query.size ? `?${query}` : ''}`)
 }
 
 export async function uploadImage(file: File, options: { avatar?: boolean } = {}) {
@@ -292,12 +301,28 @@ export function getAdminReports(params: { page?: number; pageSize?: number; stat
   return request<{ items: AdminReport[]; total: number; page: number; pageSize: number }>(`/admin/reports${query.size ? `?${query}` : ''}`)
 }
 
-export function handleAdminReport(id: number, status: 'handled' | 'dismissed') {
-  return request<void>(`/admin/reports/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) })
+export function getAdminReport(id: number) {
+  return request<AdminReport>(`/admin/reports/${id}`)
 }
 
-export function handleAdminReports(ids: number[], status: 'handled' | 'dismissed') {
-  return request<void>('/admin/reports/batch', { method: 'POST', body: JSON.stringify({ ids, status }) })
+export function handleAdminReport(id: number, status: 'handled' | 'dismissed', resolution = '') {
+  return request<void>(`/admin/reports/${id}`, { method: 'PATCH', body: JSON.stringify({ status, resolution }) })
+}
+
+export function handleAdminReports(ids: number[], status: 'handled' | 'dismissed', resolution = '') {
+  return request<void>('/admin/reports/batch', { method: 'POST', body: JSON.stringify({ ids, status, resolution }) })
+}
+
+export async function downloadAdminExport(type: 'posts' | 'users' | 'reports') {
+  const response = await fetch(`${API_BASE}/admin/export?type=${type}`, { credentials: 'include', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) })
+  if (!response.ok) throw new Error(`导出失败 (${response.status})`)
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `quietsig-${type}.csv`
+  link.click()
+  URL.revokeObjectURL(url)
 }
 
 export function getAdminLogs(params: { page?: number; pageSize?: number } = {}) {

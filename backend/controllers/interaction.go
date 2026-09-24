@@ -27,14 +27,20 @@ type NotificationDTO struct {
 }
 
 type AdminReportDTO struct {
-	ID            uint      `json:"id"`
-	TargetType    string    `json:"targetType"`
-	TargetID      uint      `json:"targetId"`
-	TargetSummary string    `json:"targetSummary"`
-	Reason        string    `json:"reason"`
-	Status        string    `json:"status"`
-	CreatedAt     time.Time `json:"createdAt"`
-	Reporter      UserDTO   `json:"reporter"`
+	ID            uint       `json:"id"`
+	TargetType    string     `json:"targetType"`
+	TargetID      uint       `json:"targetId"`
+	TargetSummary string     `json:"targetSummary"`
+	TargetTitle   string     `json:"targetTitle,omitempty"`
+	TargetSlug    string     `json:"targetSlug,omitempty"`
+	TargetStatus  string     `json:"targetStatus,omitempty"`
+	Reason        string     `json:"reason"`
+	Status        string     `json:"status"`
+	Resolution    string     `json:"resolution,omitempty"`
+	HandledAt     *time.Time `json:"handledAt,omitempty"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	Reporter      UserDTO    `json:"reporter"`
+	Handler       *UserDTO   `json:"handler,omitempty"`
 }
 
 type AdminLogDTO struct {
@@ -292,6 +298,17 @@ func (ic *InteractionController) Notifications(c *gin.Context) {
 	userID := currentUserID(c)
 	page, pageSize := pagination(c)
 	query := ic.DB.Model(&models.Notification{}).Where("user_id = ?", userID)
+	if notificationType := strings.TrimSpace(c.Query("type")); notificationType != "" && notificationType != "all" {
+		allowed := map[string]bool{"comment": true, "reply": true, "like": true, "follow": true, "post": true}
+		if !allowed[notificationType] {
+			c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "通知类型无效"})
+			return
+		}
+		query = query.Where("type = ?", notificationType)
+	}
+	if c.Query("unread") == "1" || strings.EqualFold(c.Query("unread"), "true") {
+		query = query.Where("read_at IS NULL")
+	}
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取通知失败"})
@@ -478,15 +495,50 @@ func (ic *InteractionController) AdminReports(c *gin.Context) {
 		return
 	}
 	var reports []models.Report
-	if err := query.Preload("Reporter").Order("created_at DESC, id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&reports).Error; err != nil {
+	if err := query.Preload("Reporter").Preload("Handler").Order("created_at DESC, id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&reports).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取举报失败"})
 		return
 	}
 	items := make([]AdminReportDTO, 0, len(reports))
 	for _, report := range reports {
-		items = append(items, AdminReportDTO{ID: report.ID, TargetType: report.TargetType, TargetID: report.TargetID, TargetSummary: ic.reportTargetSummary(report), Reason: report.Reason, Status: report.Status, CreatedAt: report.CreatedAt, Reporter: toUserDTO(report.Reporter)})
+		items = append(items, ic.reportDTO(report))
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"items": items, "total": total, "page": page, "pageSize": pageSize}})
+}
+
+// AdminReportDetail 返回举报目标的完整上下文，供管理员在处理前核对原文。
+func (ic *InteractionController) AdminReportDetail(c *gin.Context) {
+	var report models.Report
+	if err := ic.DB.Preload("Reporter").Preload("Handler").First(&report, c.Param("id")).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "举报不存在"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": ic.reportDTO(report)})
+}
+
+func (ic *InteractionController) reportDTO(report models.Report) AdminReportDTO {
+	item := AdminReportDTO{ID: report.ID, TargetType: report.TargetType, TargetID: report.TargetID, TargetSummary: ic.reportTargetSummary(report), Reason: report.Reason, Status: report.Status, Resolution: report.Resolution, HandledAt: report.HandledAt, CreatedAt: report.CreatedAt, Reporter: toUserDTO(report.Reporter)}
+	if report.Handler != nil {
+		handler := toUserDTO(*report.Handler)
+		item.Handler = &handler
+	}
+	switch report.TargetType {
+	case "post":
+		var post models.Post
+		if err := ic.DB.Select("title", "slug", "status", "moderation_status").First(&post, report.TargetID).Error; err == nil {
+			item.TargetTitle = post.Title
+			item.TargetSlug = post.Slug
+			item.TargetStatus = post.Status + "/" + post.ModerationStatus
+		}
+	case "comment":
+		var comment models.Comment
+		if err := ic.DB.Preload("Post").First(&comment, report.TargetID).Error; err == nil {
+			item.TargetTitle = comment.Post.Title
+			item.TargetSlug = comment.Post.Slug
+			item.TargetStatus = comment.Status
+		}
+	}
+	return item
 }
 
 // reportTargetSummary 生成举报目标的文字摘要，便于管理员判断
@@ -515,10 +567,16 @@ func (ic *InteractionController) reportTargetSummary(report models.Report) strin
 func (ic *InteractionController) AdminHandleReport(c *gin.Context) {
 	adminID := currentUserID(c)
 	var input struct {
-		Status string `json:"status" binding:"required"`
+		Status     string `json:"status" binding:"required"`
+		Resolution string `json:"resolution"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil || (input.Status != "handled" && input.Status != "dismissed") {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "举报处理状态无效"})
+		return
+	}
+	input.Resolution = strings.TrimSpace(input.Resolution)
+	if len(input.Resolution) > 500 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "处理说明不能超过 500 字"})
 		return
 	}
 	var report models.Report
@@ -527,7 +585,8 @@ func (ic *InteractionController) AdminHandleReport(c *gin.Context) {
 		return
 	}
 	if err := ic.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&report).Updates(map[string]any{"status": input.Status, "handled_by": adminID}).Error; err != nil {
+		now := time.Now()
+		if err := tx.Model(&report).Updates(map[string]any{"status": input.Status, "handled_by": adminID, "handled_at": now, "resolution": input.Resolution}).Error; err != nil {
 			return err
 		}
 		return writeAdminLog(tx, adminID, "report."+input.Status, report.TargetType, report.TargetID, report.Reason)
@@ -542,8 +601,9 @@ func (ic *InteractionController) AdminHandleReport(c *gin.Context) {
 func (ic *InteractionController) AdminHandleReportsBatch(c *gin.Context) {
 	adminID := currentUserID(c)
 	var input struct {
-		IDs    []uint `json:"ids"`
-		Status string `json:"status"`
+		IDs        []uint `json:"ids"`
+		Status     string `json:"status"`
+		Resolution string `json:"resolution"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil || len(input.IDs) == 0 || (input.Status != "handled" && input.Status != "dismissed") {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "批量举报参数无效"})
@@ -553,13 +613,18 @@ func (ic *InteractionController) AdminHandleReportsBatch(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "一次最多处理 100 条举报"})
 		return
 	}
+	input.Resolution = strings.TrimSpace(input.Resolution)
+	if len(input.Resolution) > 500 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "处理说明不能超过 500 字"})
+		return
+	}
 	if err := ic.DB.Transaction(func(tx *gorm.DB) error {
 		var reports []models.Report
 		if err := tx.Where("id IN ?", input.IDs).Find(&reports).Error; err != nil {
 			return err
 		}
 		for _, report := range reports {
-			if err := tx.Model(&report).Updates(map[string]any{"status": input.Status, "handled_by": adminID}).Error; err != nil {
+			if err := tx.Model(&report).Updates(map[string]any{"status": input.Status, "handled_by": adminID, "handled_at": time.Now(), "resolution": input.Resolution}).Error; err != nil {
 				return err
 			}
 			if err := writeAdminLog(tx, adminID, "report."+input.Status, report.TargetType, report.TargetID, report.Reason); err != nil {

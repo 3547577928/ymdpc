@@ -181,6 +181,39 @@ func TestFollowingFeedAndPostNotifications(t *testing.T) {
 	}
 }
 
+func TestRecommendedFeedAndTrendingTags(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newCommunityTestDB(t)
+	users := []models.User{{Username: "author", Nickname: "Author", Role: "user", Status: "active"}, {Username: "reader", Nickname: "Reader", Role: "user", Status: "active"}}
+	if err := db.Create(&users).Error; err != nil {
+		t.Fatal(err)
+	}
+	tag := models.Tag{Name: "系统", Slug: "system"}
+	if err := db.Create(&tag).Error; err != nil {
+		t.Fatal(err)
+	}
+	post := models.Post{AuthorID: users[0].ID, Title: "Recommended", Slug: "recommended", Content: "body", Status: "published", ModerationStatus: "normal", PublishedAt: time.Now(), LikesCount: 5}
+	if err := db.Create(&post).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&post).Association("Tags").Append(&tag); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&models.Favorite{UserID: users[1].ID, PostID: post.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	community := &CommunityController{DB: db}
+	recommended := authenticatedRequest(community.Feed, http.MethodGet, "/api/feed?mode=recommended&pageSize=10", "", nil, users[1].ID, "user")
+	if recommended.Code != http.StatusOK || !strings.Contains(recommended.Body.String(), "recommended") {
+		t.Fatalf("recommended feed missing post: %d %s", recommended.Code, recommended.Body.String())
+	}
+	interactions := &InteractionController{DB: db}
+	trending := performRequest(interactions.TrendingTags, http.MethodGet, "/api/trending/tags?days=30&limit=5", "", nil)
+	if trending.Code != http.StatusOK || !strings.Contains(trending.Body.String(), "系统") || !strings.Contains(trending.Body.String(), `"postCount":1`) {
+		t.Fatalf("unexpected trending tags: %d %s", trending.Code, trending.Body.String())
+	}
+}
+
 // TestMutedUserCannotPostOrComment 验证禁言用户不能发布文章和评论
 func TestMutedUserCannotPostOrComment(t *testing.T) {
 	gin.SetMode(gin.TestMode)

@@ -98,10 +98,16 @@ export type AdminReport = {
   targetType: 'post' | 'comment'
   targetId: number
   targetSummary: string
+  targetTitle?: string
+  targetSlug?: string
+  targetStatus?: string
   reason: string
   status: 'pending' | 'handled' | 'dismissed'
+  resolution?: string
+  handledAt?: string
   createdAt: string
   reporter: UserSummary
+  handler?: UserSummary
 }
 
 export type AdminLogEntry = {

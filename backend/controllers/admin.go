@@ -239,21 +239,41 @@ type ActiveUserDTO struct {
 	CommentCount int64   `json:"commentCount"`
 }
 
+type DailyMetricDTO struct {
+	Date     string `json:"date"`
+	Users    int64  `json:"users"`
+	Posts    int64  `json:"posts"`
+	Comments int64  `json:"comments"`
+}
+
+type TopPostDTO struct {
+	ID            uint    `json:"id"`
+	Title         string  `json:"title"`
+	Slug          string  `json:"slug"`
+	Views         int     `json:"views"`
+	LikesCount    int     `json:"likesCount"`
+	CommentsCount int     `json:"commentsCount"`
+	Author        UserDTO `json:"author"`
+}
+
 // UserStats 全站概览：规模、互动总量、今日新增与近 7 天活跃用户
 func (cc *CommunityController) UserStats(c *gin.Context) {
 	var stats struct {
-		Total         int64           `json:"total"`
-		Users         int64           `json:"users"`
-		Posts         int64           `json:"posts"`
-		Published     int64           `json:"published"`
-		Views         int64           `json:"views"`
-		Likes         int64           `json:"likes"`
-		Comments      int64           `json:"comments"`
-		Followers     int64           `json:"follows"`
-		TodayUsers    int64           `json:"todayUsers"`
-		TodayPosts    int64           `json:"todayPosts"`
-		TodayComments int64           `json:"todayComments"`
-		ActiveUsers   []ActiveUserDTO `json:"activeUsers"`
+		Total          int64            `json:"total"`
+		Users          int64            `json:"users"`
+		Posts          int64            `json:"posts"`
+		Published      int64            `json:"published"`
+		Views          int64            `json:"views"`
+		Likes          int64            `json:"likes"`
+		Comments       int64            `json:"comments"`
+		Followers      int64            `json:"follows"`
+		TodayUsers     int64            `json:"todayUsers"`
+		TodayPosts     int64            `json:"todayPosts"`
+		TodayComments  int64            `json:"todayComments"`
+		PendingReports int64            `json:"pendingReports"`
+		ActiveUsers    []ActiveUserDTO  `json:"activeUsers"`
+		DailyMetrics   []DailyMetricDTO `json:"dailyMetrics"`
+		TopPosts       []TopPostDTO     `json:"topPosts"`
 	}
 	if err := cc.DB.Model(&models.User{}).Count(&stats.Users).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取统计失败"})
@@ -281,6 +301,10 @@ func (cc *CommunityController) UserStats(c *gin.Context) {
 		return
 	}
 	if err := cc.DB.Model(&models.Follow{}).Count(&stats.Followers).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取统计失败"})
+		return
+	}
+	if err := cc.DB.Model(&models.Report{}).Where("status = ?", "pending").Count(&stats.PendingReports).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取统计失败"})
 		return
 	}
@@ -325,5 +349,53 @@ func (cc *CommunityController) UserStats(c *gin.Context) {
 		})
 	}
 	stats.ActiveUsers = activeUsers
+
+	startDay := time.Now().AddDate(0, 0, -13)
+	startDay = time.Date(startDay.Year(), startDay.Month(), startDay.Day(), 0, 0, 0, 0, startDay.Location())
+	type metricRow struct {
+		Date  string
+		Count int64
+	}
+	loadMetric := func(model any) (map[string]int64, error) {
+		var metricRows []metricRow
+		if err := cc.DB.Model(model).Select("date(created_at) AS date, COUNT(*) AS count").Where("created_at >= ?", startDay).Group("date(created_at)").Scan(&metricRows).Error; err != nil {
+			return nil, err
+		}
+		result := make(map[string]int64, len(metricRows))
+		for _, row := range metricRows {
+			result[row.Date] = row.Count
+		}
+		return result, nil
+	}
+	userMetrics, err := loadMetric(&models.User{})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取趋势统计失败"})
+		return
+	}
+	postMetrics, err := loadMetric(&models.Post{})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取趋势统计失败"})
+		return
+	}
+	commentMetrics, err := loadMetric(&models.Comment{})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取趋势统计失败"})
+		return
+	}
+	stats.DailyMetrics = make([]DailyMetricDTO, 0, 14)
+	for offset := 0; offset < 14; offset++ {
+		day := startDay.AddDate(0, 0, offset).Format("2006-01-02")
+		stats.DailyMetrics = append(stats.DailyMetrics, DailyMetricDTO{Date: day, Users: userMetrics[day], Posts: postMetrics[day], Comments: commentMetrics[day]})
+	}
+
+	var topPosts []models.Post
+	if err := cc.DB.Where("status = ? AND moderation_status = ?", "published", "normal").Preload("Author").Order("views DESC, likes_count DESC, comments_count DESC, id DESC").Limit(5).Find(&topPosts).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取热门文章失败"})
+		return
+	}
+	stats.TopPosts = make([]TopPostDTO, 0, len(topPosts))
+	for _, post := range topPosts {
+		stats.TopPosts = append(stats.TopPosts, TopPostDTO{ID: post.ID, Title: post.Title, Slug: post.Slug, Views: post.Views, LikesCount: post.LikesCount, CommentsCount: post.CommentsCount, Author: toUserDTO(post.Author)})
+	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": stats})
 }

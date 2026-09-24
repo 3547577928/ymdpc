@@ -17,7 +17,10 @@ const stats: AdminStats = {
   todayUsers: 1,
   todayPosts: 1,
   todayComments: 1,
+  pendingReports: 0,
   activeUsers: [],
+  dailyMetrics: [],
+  topPosts: [],
 }
 const post: PostSummary = {
   id: 9,
@@ -83,6 +86,7 @@ function renderContent(overrides: Partial<React.ComponentProps<typeof AdminConte
     onReportStatusChange: vi.fn(),
     onReportPageChange: vi.fn(),
     onReport: vi.fn(),
+    onExport: vi.fn(),
     logs: [],
     logTotal: 0,
     logPage: 1,

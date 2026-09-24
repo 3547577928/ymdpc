@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { PostCard } from '../components/PostCard'
 import { SectionHeading } from '../components/SectionHeading'
 import { CoverImage } from '../components/CoverImage'
-import { getFeed } from '../services/api'
+import { getFeed, getTrendingTags } from '../services/api'
 import type { PostSummary } from '../types'
 import { formatDate } from '../utils'
 
@@ -13,16 +13,17 @@ export function HomePage() {
   const [posts, setPosts] = useState<PostSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [trendingTags, setTrendingTags] = useState<string[]>([])
 
   useEffect(() => {
-    getFeed({ mode: 'latest', pageSize: 12 })
-      .then((data) => setPosts(data.items))
+    Promise.all([getFeed({ mode: 'latest', pageSize: 12 }), getTrendingTags({ limit: 8 })])
+      .then(([data, tags]) => { setPosts(data.items); setTrendingTags(tags.map((tag) => tag.name)) })
       .catch((reason: Error) => setError(reason.message))
       .finally(() => setLoading(false))
   }, [])
 
   const featured = posts.find((post) => post.featured) ?? posts[0]
-  const allTags = useMemo(() => Array.from(new Set(posts.flatMap((post) => post.tags))), [posts])
+  const allTags = useMemo(() => trendingTags.length ? trendingTags : Array.from(new Set(posts.flatMap((post) => post.tags))), [posts, trendingTags])
 
   if (loading) return <div className="container page-state"><span className="eyebrow">Loading notes</span><h1>正在读取文章。</h1></div>
   if (error) return <div className="container page-state"><span className="eyebrow">Connection error</span><h1>文章暂时无法加载。</h1><p>{error}</p></div>
