@@ -3,6 +3,9 @@ frontend/dist/
 backend/quietsignal
 backend/server
 backend/data/
+backend/.gobin
+backend/.gocache
+backend/.gopath
 .DS_Store
 .env
 *.tar

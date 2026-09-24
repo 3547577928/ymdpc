@@ -9,7 +9,11 @@ export default tseslint.config(
   {
     // public 下的原生脚本运行在浏览器环境
     files: ['public/**/*.js'],
-    languageOptions: { globals: { document: 'readonly', localStorage: 'readonly', matchMedia: 'readonly', window: 'readonly' } },
+    languageOptions: { globals: { document: 'readonly', localStorage: 'readonly', matchMedia: 'readonly', window: 'readonly', self: 'readonly', caches: 'readonly', fetch: 'readonly' } },
+  },
+  {
+    files: ['e2e/**/*.ts'],
+    // Playwright 测试使用全局 fixture（test, expect 等），由 playwright.config.ts 注入
   },
   {
     files: ['src/**/*.{ts,tsx}'],

@@ -1,4 +1,4 @@
-import type { AdminComment, AdminLogEntry, AdminReport, Category, Comment, ForumKind, ForumReply, ForumTopic, NotificationItem, Post, PostRevision, PostStatus, PostSummary, TagUsage, UserSummary } from '../types'
+import type { AdminComment, AdminLogEntry, AdminReport, Category, PostComment, ForumKind, ForumReply, ForumTopic, NotificationItem, Post, PostRevision, PostStatus, PostSummary, TagUsage, UserSummary } from '../types'
 import { prepareImageForUpload } from '../utils/imageUpload'
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '/api'
@@ -23,7 +23,7 @@ export type UserProfile = { user: UserSummary; posts: PostSummary[]; postCount: 
 export type AdminUser = UserSummary & { status: string; postCount: number; likeCount: number; followers: number; following: number }
 export type ForumTopicPage = { items: ForumTopic[]; total: number; page: number; pageSize: number }
 export type ForumTopicDetail = { topic: ForumTopic; replies: ForumReply[]; repliesTotal: number }
-export type CommentPage = { items: Comment[]; total: number; page: number; pageSize: number }
+export type CommentPage = { items: PostComment[]; total: number; page: number; pageSize: number }
 
 // 请求超时：后端无响应时及时失败，避免页面长期停留在加载态
 const REQUEST_TIMEOUT_MS = 15_000
@@ -271,12 +271,12 @@ export function sendCommentTyping(slug: string) {
 }
 
 export function createComment(slug: string, input: { content: string; parentId?: number; replyToUserId?: number }) {
-  return request<Comment>(`/posts/${encodeURIComponent(slug)}/comments`, { method: 'POST', body: JSON.stringify(input) })
+  return request<PostComment>(`/posts/${encodeURIComponent(slug)}/comments`, { method: 'POST', body: JSON.stringify(input) })
 }
 
 // 编辑评论：postSlug 用于服务端向该文章的读者广播编辑事件
 export function updateComment(id: number, content: string, postSlug?: string) {
-  return request<Comment>(`/comments/${id}${postSlug ? `?postSlug=${encodeURIComponent(postSlug)}` : ''}`, { method: 'PATCH', body: JSON.stringify({ content }) })
+  return request<PostComment>(`/comments/${id}${postSlug ? `?postSlug=${encodeURIComponent(postSlug)}` : ''}`, { method: 'PATCH', body: JSON.stringify({ content }) })
 }
 
 export function deleteComment(id: number) {

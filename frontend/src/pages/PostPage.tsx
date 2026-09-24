@@ -7,20 +7,20 @@ import { ReadingProgress } from '../components/ReadingProgress'
 import { CoverImage } from '../components/CoverImage'
 import { ConfirmDialog, NoticeDialog, PromptDialog } from '../components/Dialog'
 import { MarkdownContent } from '../components/MarkdownContent'
-import type { Comment, Post } from '../types'
+import type { PostComment, Post } from '../types'
 import { formatDate } from '../utils'
 import { extractMarkdownHeadings } from '../utils/markdown'
 import { usePageMeta } from '../utils/usePageMeta'
 
 // 评论树节点：顶层评论 + 挂在其下的回复（方案要求评论最多两层）
-type CommentNode = { comment: Comment; replies: Comment[] }
+type CommentNode = { comment: PostComment; replies: PostComment[] }
 type ReportRequest = { targetType: 'post' | 'comment'; targetId: number; title: string }
 
 // 后端返回按时间排序的平铺列表，这里重建为两层结构：
 // 回复的回复归到根评论下；父评论已删除的回复提升为顶层，避免丢失
-function buildCommentTree(flat: Comment[]): CommentNode[] {
+function buildCommentTree(flat: PostComment[]): CommentNode[] {
   const byId = new Map(flat.map((item) => [item.id, item]))
-  const nodes = new Map<number, CommentNode>(flat.map((item) => [item.id, { comment: item, replies: [] as Comment[] }]))
+  const nodes = new Map<number, CommentNode>(flat.map((item) => [item.id, { comment: item, replies: [] as PostComment[] }]))
   const roots: CommentNode[] = []
   for (const item of flat) {
     if (!item.parentId) {
@@ -48,21 +48,21 @@ export function PostPage() {
   const [error, setError] = useState('')
   const { user } = useAuth()
   usePageMeta(post?.title, post?.summary)
-  const [comments, setComments] = useState<Comment[]>([])
+  const [comments, setComments] = useState<PostComment[]>([])
   const [commentPage, setCommentPage] = useState(1)
   const [commentsTotal, setCommentsTotal] = useState(0)
   const [commentsLoading, setCommentsLoading] = useState(false)
   const [commentInput, setCommentInput] = useState('')
   const [typingUser, setTypingUser] = useState<string>()
   const typingSentAt = useRef(0)
-  const [replyTo, setReplyTo] = useState<Comment>()
+  const [replyTo, setReplyTo] = useState<PostComment>()
   const [commentSaving, setCommentSaving] = useState(false)
   const [following, setFollowing] = useState(false)
   const [followBusy, setFollowBusy] = useState(false)
   const [reportRequest, setReportRequest] = useState<ReportRequest>()
   const [reportReason, setReportReason] = useState('')
   const [notice, setNotice] = useState<{ title: string; message: string }>()
-  const [deleteRequest, setDeleteRequest] = useState<Comment>()
+  const [deleteRequest, setDeleteRequest] = useState<PostComment>()
   const [editingComment, setEditingComment] = useState<number>()
   const [editCommentInput, setEditCommentInput] = useState('')
   const [collapsedThreads, setCollapsedThreads] = useState<Set<number>>(new Set())
@@ -91,7 +91,7 @@ export function PostPage() {
     const source = new EventSource(`/api/posts/${encodeURIComponent(postSlug)}/comments/stream`)
     source.addEventListener('comment', (event) => {
       try {
-        const comment = JSON.parse((event as MessageEvent).data) as Comment
+        const comment = JSON.parse((event as MessageEvent).data) as PostComment
         setComments((current) => current.some((item) => item.id === comment.id) ? current : [...current, comment])
         if (!comment.parentId) setCommentsTotal((total) => total + 1)
         setPost((current) => current ? { ...current, commentsCount: current.commentsCount + 1 } : current)
@@ -99,7 +99,7 @@ export function PostPage() {
     })
     source.addEventListener('comment_edited', (event) => {
       try {
-        const updated = JSON.parse((event as MessageEvent).data) as Comment
+        const updated = JSON.parse((event as MessageEvent).data) as PostComment
         setComments((current) => current.map((item) => item.id === updated.id ? { ...item, ...updated, liked: item.liked } : item))
       } catch { /* 无法解析的事件忽略 */ }
     })
@@ -219,14 +219,14 @@ export function PostPage() {
   }
 
   // 举报评论
-  const reportComment = (comment: Comment) => {
+  const reportComment = (comment: PostComment) => {
     if (!user) return
     setReportReason('')
     setReportRequest({ targetType: 'comment', targetId: comment.id, title: '举报评论' })
   }
 
   // 点赞或取消点赞评论，原地更新列表
-  const toggleCommentLike = async (comment: Comment) => {
+  const toggleCommentLike = async (comment: PostComment) => {
     if (!user) return
     try {
       const result = comment.liked ? await unlikeComment(comment.id) : await likeComment(comment.id)
@@ -255,7 +255,7 @@ export function PostPage() {
     }
   }
 
-  const removeComment = (comment: Comment) => {
+  const removeComment = (comment: PostComment) => {
     setDeleteRequest(comment)
   }
 
@@ -275,7 +275,7 @@ export function PostPage() {
     }
   }
 
-  const togglePinned = async (comment: Comment) => {
+  const togglePinned = async (comment: PostComment) => {
     try {
       const result = await pinComment(comment.id, !comment.pinned)
       setComments((current) => current.map((item) => item.id === comment.id ? { ...item, pinned: result.pinned } : item))
@@ -300,7 +300,7 @@ export function PostPage() {
 
   // 平铺评论重建为两层树后再渲染，保证回复显示在被回复的评论下面
   const commentTree = buildCommentTree(comments)
-  const saveEditComment = async (comment: Comment) => {
+  const saveEditComment = async (comment: PostComment) => {
     if (!post || !editCommentInput.trim()) return
     try {
       const updated = await updateComment(comment.id, editCommentInput.trim(), post.slug)
@@ -311,7 +311,7 @@ export function PostPage() {
     }
   }
 
-  const renderComment = (comment: Comment, isReply: boolean) => (
+  const renderComment = (comment: PostComment, isReply: boolean) => (
     <div className={`comment-item ${isReply ? 'is-reply' : ''}`} key={comment.id}>
       <div className="comment-avatar">{comment.author.avatar ? <img src={comment.author.avatar} alt="" /> : comment.author.nickname.slice(0, 1)}</div>
       <div className="comment-body">

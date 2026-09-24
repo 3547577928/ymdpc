@@ -85,7 +85,8 @@ export type ForumReply = {
   author: UserSummary
 }
 
-export type Comment = {
+// PostComment 避免与 DOM 全局 Comment 类型冲突
+export type PostComment = {
   id: number
   postId: number
   parentId: number | null

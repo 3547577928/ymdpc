@@ -1,8 +1,15 @@
+// Quiet Signal API — 安静的写作社区
+//
+// @title       Quiet Signal API
+// @version     0.1
+// @description 写作社区后端接口，涵盖认证、文章、评论、论坛、通知、管理等功能
+// @host        localhost:8080
+// @BasePath    /api
 package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -15,27 +22,35 @@ import (
 
 	"quietsignal/backend/config"
 	"quietsignal/backend/controllers"
+	_ "quietsignal/backend/docs"
 	"quietsignal/backend/models"
 	"quietsignal/backend/routes"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 	"gorm.io/gorm"
 )
 
 func main() {
 	cfg := config.Load()
+	// 结构化日志：slog 默认写入 stderr，gin 框架使用自有 Logger 中间件输出 HTTP 日志
+	fatal := func(msg string, args ...any) {
+		slog.Error(msg, args...)
+		os.Exit(1)
+	}
 	if gin.Mode() == gin.ReleaseMode {
 		if err := cfg.ValidateProduction(); err != nil {
-			log.Fatal(err)
+			fatal(err.Error())
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(cfg.DatabasePath), 0o755); err != nil {
-		log.Fatalf("create database directory: %v", err)
+		fatal("create database directory", "err", err)
 	}
 	if err := os.MkdirAll(cfg.UploadDir, 0o755); err != nil {
-		log.Fatalf("create upload directory: %v", err)
+		fatal("create upload directory", "err", err)
 	}
 	separator := "?"
 	if strings.Contains(cfg.DatabasePath, "?") {
@@ -47,13 +62,13 @@ func main() {
 	migrateDSN := cfg.DatabasePath + separator + "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
 	migrateDB, err := gorm.Open(sqlite.Open(migrateDSN), &gorm.Config{TranslateError: true})
 	if err != nil {
-		log.Fatalf("connect database: %v", err)
+		fatal("connect migrate database", "err", err)
 	}
 	if err := migrateDB.AutoMigrate(&models.User{}, &models.EmailLoginCode{}, &models.Post{}, &models.Tag{}, &models.Comment{}, &models.PostLike{}, &models.Follow{}, &models.Category{}, &models.Favorite{}, &models.CommentLike{}, &models.Notification{}, &models.Report{}, &models.AdminLog{}, &models.Setting{}, &models.PostRevision{}, &models.ForumTopic{}, &models.ForumTopicImage{}, &models.ForumReply{}, &models.ForumTopicLike{}, &models.ForumReplyLike{}, &models.TagSubscription{}, &models.Series{}); err != nil {
-		log.Fatalf("migrate database: %v", err)
+		fatal("migrate database", "err", err)
 	}
 	if err := models.EnsureIndexes(migrateDB); err != nil {
-		log.Fatalf("create database indexes: %v", err)
+		fatal("create database indexes", "err", err)
 	}
 	if sqlDB, err := migrateDB.DB(); err == nil {
 		_ = sqlDB.Close()
@@ -62,15 +77,15 @@ func main() {
 	dsn := cfg.DatabasePath + separator + "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{TranslateError: true})
 	if err != nil {
-		log.Fatalf("connect database: %v", err)
+		fatal("connect runtime database", "err", err)
 	}
 	if err := models.Seed(db, cfg.AdminUsername, cfg.AdminPassword); err != nil {
-		log.Fatalf("seed database: %v", err)
+		fatal("seed database", "err", err)
 	}
 	// 全文搜索索引（FTS5 trigram）；不可用时自动退化为 LIKE，见 controllers/search.go
 	controllers.SetupPostSearch(db)
 	if err := controllers.PublishScheduledPosts(db, time.Now()); err != nil {
-		log.Printf("publish scheduled posts: %v", err)
+		slog.Warn("publish scheduled posts", "err", err)
 	}
 	schedulerCtx, stopScheduler := context.WithCancel(context.Background())
 	defer stopScheduler()
@@ -82,11 +97,12 @@ func main() {
 	go controllers.RunDataCleanup(schedulerCtx, db, cfg.UploadDir)
 
 	r := gin.New()
+	r.GET("/docs/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 	r.Static("/uploads", cfg.UploadDir)
 	r.Use(gin.Logger(), gin.Recovery(), cors.New(corsConfig(cfg.AllowedOrigins, gin.Mode() != gin.ReleaseMode)))
 	routes.Register(r, routes.Dependencies{Posts: &controllers.PostController{DB: db, UploadDir: cfg.UploadDir, Views: viewCounter}, Community: &controllers.CommunityController{DB: db, UploadDir: cfg.UploadDir}, Forum: &controllers.ForumController{DB: db}, Interactions: &controllers.InteractionController{DB: db}, Tags: &controllers.TagController{DB: db}, Series: &controllers.SeriesController{DB: db}, Auth: &controllers.AuthController{DB: db, Secret: cfg.JWTSecret, CookieSecure: cfg.CookieSecure, SMTPHost: cfg.SMTPHost, SMTPPort: cfg.SMTPPort, SMTPUsername: cfg.SMTPUsername, SMTPPassword: cfg.SMTPPassword, SMTPFrom: cfg.SMTPFrom, EmailCodeTTL: cfg.EmailCodeTTL}, Uploads: &controllers.UploadController{Dir: cfg.UploadDir, DB: db}, Secret: cfg.JWTSecret, DB: db})
 
-	log.Printf("quiet signal api listening on :%s", cfg.Port)
+	slog.Info("quiet signal api listening", "port", cfg.Port)
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           r,
@@ -97,7 +113,7 @@ func main() {
 	}
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("serve api: %v", err)
+			fatal("serve api", "err", err)
 		}
 	}()
 
@@ -108,7 +124,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {
-		log.Printf("shutdown api: %v", err)
+		slog.Warn("shutdown api", "err", err)
 	}
 }
 

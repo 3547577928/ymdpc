@@ -2,7 +2,7 @@ package controllers
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"time"
 
 	"quietsignal/backend/models"
@@ -35,11 +35,11 @@ func CleanupOldData(db *gorm.DB, now time.Time) error {
 func RunDataCleanup(ctx context.Context, db *gorm.DB, uploadDir string) {
 	run := func() {
 		if err := CleanupOldData(db, time.Now()); err != nil {
-			log.Printf("cleanup old data: %v", err)
+			slog.Warn("cleanup old data", "err", err)
 		}
 		if uploadDir != "" {
 			if _, err := cleanupUnreferencedUploads(uploadDir, db); err != nil {
-				log.Printf("cleanup uploads: %v", err)
+				slog.Warn("cleanup uploads", "err", err)
 			}
 		}
 	}

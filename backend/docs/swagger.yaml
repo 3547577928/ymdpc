@@ -1,0 +1,9 @@
+basePath: /api
+host: localhost:8080
+info:
+  contact: {}
+  description: 写作社区后端接口，涵盖认证、文章、评论、论坛、通知、管理等功能
+  title: Quiet Signal API
+  version: "0.1"
+paths: {}
+swagger: "2.0"

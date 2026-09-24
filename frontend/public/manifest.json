@@ -1,0 +1,16 @@
+{
+  "name": "Quiet Signal",
+  "short_name": "QS",
+  "description": "一个安静的写作社区",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f7f5",
+  "theme_color": "#1b1b1b",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "32x32",
+      "type": "image/svg+xml"
+    }
+  ]
+}

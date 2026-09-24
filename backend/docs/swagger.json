@@ -1,0 +1,12 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "description": "写作社区后端接口，涵盖认证、文章、评论、论坛、通知、管理等功能",
+        "title": "Quiet Signal API",
+        "contact": {},
+        "version": "0.1"
+    },
+    "host": "localhost:8080",
+    "basePath": "/api",
+    "paths": {}
+}

@@ -9,7 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
@@ -131,7 +131,7 @@ func (a *AuthController) RequestEmailCode(c *gin.Context) {
 		return
 	}
 	if err := a.sendEmailCode(email, code); err != nil {
-		log.Printf("email login code delivery failed: host=%s port=%d err=%v", a.SMTPHost, a.SMTPPort, err)
+		slog.Warn("email login code delivery failed", "host", a.SMTPHost, "port", a.SMTPPort, "err", err)
 		a.DB.Delete(&record)
 		c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "message": "邮件发送失败，请稍后重试"})
 		return

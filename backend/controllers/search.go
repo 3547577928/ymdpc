@@ -1,7 +1,7 @@
 package controllers
 
 import (
-	"log"
+	"log/slog"
 	"strings"
 	"sync/atomic"
 	"unicode/utf8"
@@ -32,12 +32,12 @@ func SetupPostSearch(db *gorm.DB) {
 	}
 	for _, statement := range statements {
 		if err := db.Exec(statement).Error; err != nil {
-			log.Printf("full-text search unavailable, falling back to LIKE: %v", err)
+			slog.Warn("full-text search unavailable, falling back to LIKE", "err", err)
 			return
 		}
 	}
 	if err := db.Exec("INSERT INTO posts_fts(posts_fts) VALUES ('rebuild')").Error; err != nil {
-		log.Printf("rebuild full-text index failed, falling back to LIKE: %v", err)
+		slog.Warn("rebuild full-text index failed, falling back to LIKE", "err", err)
 		return
 	}
 	postSearchFTS.Store(true)
