@@ -1,10 +1,14 @@
 import { ArrowLeft, FileText, Pencil, Trash2 } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { deletePost, getMyPosts } from '../services/api'
+import { useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { deleteUserPost } from '../services/api'
+import { useMyPosts } from '../services/queries'
 import { ConfirmDialog } from '../components/Dialog'
+import { SkeletonList } from '../components/Skeleton'
 import type { PostStatus, PostSummary } from '../types'
 import { formatDate } from '../utils'
+import { usePageMeta } from '../utils/usePageMeta'
 
 const tabs: { key: string; label: string }[] = [
   { key: '', label: '全部' },
@@ -18,48 +22,40 @@ const statusLabels: Record<PostStatus, string> = { draft: '草稿', scheduled: '
 
 // 我的文章与草稿管理页，作者可以编辑或删除自己的任何状态文章
 export function MyPostsPage() {
-  // 初始状态从 URL 读取，支持 /me/posts?status=draft 直接进入草稿箱
-  const [status, setStatus] = useState(() => new URLSearchParams(window.location.search).get('status') ?? '')
-  const [posts, setPosts] = useState<PostSummary[]>([])
-  const [total, setTotal] = useState(0)
+  usePageMeta('我的文章')
+  // 状态筛选与 URL 同步：/me/posts?status=draft 直接进入草稿箱；
+  // 用 useSearchParams 响应式读取，导航菜单在页面已挂载时切换草稿箱也能生效
+  const [searchParams, setSearchParams] = useSearchParams()
+  const status = searchParams.get('status') ?? ''
+  const setStatus = (next: string) => setSearchParams(next ? { status: next } : {})
   const [page, setPage] = useState(1)
-  const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [deleteRequest, setDeleteRequest] = useState<PostSummary>()
   const pageSize = 20
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const data = await getMyPosts({ status, page, pageSize })
-      setPosts(data.items)
-      setTotal(data.total)
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '读取文章失败')
-    } finally {
-      setLoading(false)
-    }
-  }, [status, page])
-
-  useEffect(() => {
-    void load()
-  }, [load])
+  const queryClient = useQueryClient()
+  const postsQuery = useMyPosts(status, page, pageSize)
+  const posts = postsQuery.data?.items ?? []
+  const total = postsQuery.data?.total ?? 0
+  const loading = postsQuery.isLoading
+  if (postsQuery.error) setError(postsQuery.error.message)
 
   const handleDelete = (post: PostSummary) => {
     setDeleteRequest(post)
   }
 
+  const deleteMutation = useMutation({
+    mutationFn: deleteUserPost,
+    // 删除成功后失效我的文章缓存，重新拉取当前页
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['my-posts'] }),
+    onError: (reason) => setError(reason.message),
+  })
+
   const confirmDelete = async () => {
     if (!deleteRequest) return
-    const post = deleteRequest
+    // 普通作者走用户端点 /posts/id/:id，admin 端点仅限后台使用
+    if (posts.length === 1 && page > 1) setPage((current) => current - 1)
+    deleteMutation.mutate(deleteRequest.id)
     setDeleteRequest(undefined)
-    try {
-      await deletePost(post.id)
-      if (posts.length === 1 && page > 1) setPage((current) => current - 1)
-      else void load()
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '删除文章失败')
-    }
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
@@ -71,7 +67,7 @@ export function MyPostsPage() {
       {tabs.map((tab) => <button key={tab.key} className={status === tab.key ? 'is-active' : ''} onClick={() => { setStatus(tab.key); setPage(1) }}>{tab.label}</button>)}
     </div>
     {error && <div className="form-error">{error}</div>}
-    {loading ? <div className="page-state"><h1>正在读取。</h1></div> : posts.length ? <div className="admin-table">
+    {loading ? <SkeletonList count={6} /> : posts.length ? <div className="admin-table">
       <div className="table-head"><span>标题</span><span>状态</span><span>更新时间</span><span>操作</span></div>
       {posts.map((post) => <div className="table-row" key={post.id}>
         <div className="table-title"><FileText size={16} /><span><Link to={`/posts/${post.slug}`}>{post.title}</Link><small>{post.category ? post.category.name : post.tags[0] ?? ''}</small></span></div>

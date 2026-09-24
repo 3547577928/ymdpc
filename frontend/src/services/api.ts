@@ -1,4 +1,4 @@
-import type { AdminComment, AdminLogEntry, AdminReport, Category, Comment, NotificationItem, Post, PostRevision, PostStatus, PostSummary, TagUsage, UserSummary } from '../types'
+import type { AdminComment, AdminLogEntry, AdminReport, Category, Comment, ForumKind, ForumReply, ForumTopic, NotificationItem, Post, PostRevision, PostStatus, PostSummary, TagUsage, UserSummary } from '../types'
 import { prepareImageForUpload } from '../utils/imageUpload'
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '/api'
@@ -18,6 +18,9 @@ export type TrendingTag = { id: number; name: string; slug: string; postCount: n
 export type FeedPage = PostPage & { mode: string }
 export type UserProfile = { user: UserSummary; posts: PostSummary[]; postCount: number; likeCount: number; followers: number; following: number; followingMe: boolean }
 export type AdminUser = UserSummary & { status: string; postCount: number; likeCount: number; followers: number; following: number }
+export type ForumTopicPage = { items: ForumTopic[]; total: number; page: number; pageSize: number }
+export type ForumTopicDetail = { topic: ForumTopic; replies: ForumReply[]; repliesTotal: number }
+export type CommentPage = { items: Comment[]; total: number; page: number; pageSize: number }
 
 // 请求超时：后端无响应时及时失败，避免页面长期停留在加载态
 const REQUEST_TIMEOUT_MS = 15_000
@@ -50,7 +53,7 @@ async function request<T>(path: string, options?: RequestOptions): Promise<T> {
   } catch (reason) {
     // 超时抛的是 DOMException，转成中文提示，其余错误原样抛出
     if (reason instanceof DOMException && reason.name === 'TimeoutError') {
-      throw new Error('请求超时，请检查网络后重试')
+      throw new Error('请求超时，请检查网络后重试', { cause: reason })
     }
     throw reason
   }
@@ -121,8 +124,56 @@ export function getFeed(params: { mode?: string; q?: string; tag?: string; categ
   return request<FeedPage>(`/feed${query.size ? `?${query}` : ''}`)
 }
 
-export function getUserProfile(username: string) {
-  return request<UserProfile>(`/users/${encodeURIComponent(username)}`)
+export function getForumTopics(params: { mode?: 'latest' | 'hot'; kind?: ForumKind | 'all'; q?: string; page?: number; pageSize?: number } = {}) {
+  const query = new URLSearchParams()
+  Object.entries(params).forEach(([key, value]) => { if (value && value !== 'all') query.set(key, String(value)) })
+  return request<ForumTopicPage>(`/forum${query.size ? `?${query}` : ''}`)
+}
+
+export function createForumTopic(input: { content: string; kind: ForumKind; images: string[] }) {
+  return request<ForumTopic>('/forum', { method: 'POST', body: JSON.stringify(input) })
+}
+
+export function getForumTopic(id: number, params: { replyPage?: number; replyPageSize?: number } = {}) {
+  const query = new URLSearchParams()
+  if (params.replyPage) query.set('replyPage', String(params.replyPage))
+  if (params.replyPageSize) query.set('replyPageSize', String(params.replyPageSize))
+  return request<ForumTopicDetail>(`/forum/${id}${query.size ? `?${query}` : ''}`)
+}
+
+export function deleteForumTopic(id: number) {
+  return request<void>(`/forum/${id}`, { method: 'DELETE' })
+}
+
+export function likeForumTopic(id: number) {
+  return request<{ liked: boolean; likesCount: number }>(`/forum/${id}/like`, { method: 'POST' })
+}
+
+export function unlikeForumTopic(id: number) {
+  return request<{ liked: boolean; likesCount: number }>(`/forum/${id}/like`, { method: 'DELETE' })
+}
+
+export function createForumReply(id: number, input: { content: string; parentId?: number; replyToUserId?: number }) {
+  return request<ForumReply>(`/forum/${id}/replies`, { method: 'POST', body: JSON.stringify(input) })
+}
+
+export function deleteForumReply(id: number) {
+  return request<void>(`/forum/replies/${id}`, { method: 'DELETE' })
+}
+
+export function likeForumReply(id: number) {
+  return request<{ liked: boolean; likesCount: number }>(`/forum/replies/${id}/like`, { method: 'POST' })
+}
+
+export function unlikeForumReply(id: number) {
+  return request<{ liked: boolean; likesCount: number }>(`/forum/replies/${id}/like`, { method: 'DELETE' })
+}
+
+export function getUserProfile(username: string, params: { page?: number; pageSize?: number } = {}) {
+  const query = new URLSearchParams()
+  if (params.page) query.set('page', String(params.page))
+  if (params.pageSize) query.set('pageSize', String(params.pageSize))
+  return request<UserProfile>(`/users/${encodeURIComponent(username)}${query.size ? `?${query}` : ''}`)
 }
 
 export function followUser(id: number) {
@@ -145,8 +196,12 @@ export function deleteUserPost(id: number) {
   return request<void>(`/posts/id/${id}`, { method: 'DELETE' })
 }
 
-export function getComments(slug: string) {
-  return request<Comment[]>(`/posts/${encodeURIComponent(slug)}/comments`)
+// 评论按顶层分页返回（回复随父评论带出），total 为顶层评论数
+export function getComments(slug: string, params: { page?: number; pageSize?: number } = {}) {
+  const query = new URLSearchParams()
+  query.set('page', String(params.page ?? 1))
+  query.set('pageSize', String(params.pageSize ?? 20))
+  return request<CommentPage>(`/posts/${encodeURIComponent(slug)}/comments?${query}`)
 }
 
 export function createComment(slug: string, input: { content: string; parentId?: number; replyToUserId?: number }) {
@@ -173,7 +228,7 @@ export function unfavoritePost(slug: string) {
   return request<{ favorited: boolean; favoriteCount: number }>(`/posts/${encodeURIComponent(slug)}/favorite`, { method: 'DELETE' })
 }
 
-export function createReport(input: { targetType: 'post' | 'comment'; targetId: number; reason: string }) {
+export function createReport(input: { targetType: 'post' | 'comment' | 'forum_topic' | 'forum_reply'; targetId: number; reason: string }) {
   return request<void>('/reports', { method: 'POST', body: JSON.stringify(input) })
 }
 

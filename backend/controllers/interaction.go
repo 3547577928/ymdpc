@@ -53,9 +53,15 @@ type AdminLogDTO struct {
 	Admin      UserDTO   `json:"admin"`
 }
 
-// createNotification 写入一条通知，调用方需保证接收者不是操作者本人
+// createNotification 写入一条通知，调用方需保证接收者不是操作者本人。
+// 写库后即推送 SSE 提醒；在事务里调用时可能在提交前推送，客户端会重算
+// 未读数，极端情况下多读一次空提醒，可接受
 func createNotification(db *gorm.DB, userID, actorID uint, notificationType string, resourceID uint) error {
-	return db.Create(&models.Notification{UserID: userID, ActorID: actorID, Type: notificationType, ResourceID: resourceID}).Error
+	if err := db.Create(&models.Notification{UserID: userID, ActorID: actorID, Type: notificationType, ResourceID: resourceID}).Error; err != nil {
+		return err
+	}
+	notificationHub.Notify(userID)
+	return nil
 }
 
 // notifyFollowersOfPost 在文章首次发布时通知作者的全部粉丝。
@@ -76,7 +82,13 @@ func notifyFollowersOfPost(db *gorm.DB, authorID, postID uint) error {
 	if len(notifications) == 0 {
 		return nil
 	}
-	return db.Create(&notifications).Error
+	if err := db.Create(&notifications).Error; err != nil {
+		return err
+	}
+	for _, notification := range notifications {
+		notificationHub.Notify(notification.UserID)
+	}
+	return nil
 }
 
 // writeAdminLog 写入管理操作日志，保留封禁、删除、下架等操作的审核记录
@@ -299,7 +311,7 @@ func (ic *InteractionController) Notifications(c *gin.Context) {
 	page, pageSize := pagination(c)
 	query := ic.DB.Model(&models.Notification{}).Where("user_id = ?", userID)
 	if notificationType := strings.TrimSpace(c.Query("type")); notificationType != "" && notificationType != "all" {
-		allowed := map[string]bool{"comment": true, "reply": true, "like": true, "follow": true, "post": true}
+		allowed := map[string]bool{"comment": true, "reply": true, "like": true, "follow": true, "post": true, "forum_reply": true, "forum_like": true}
 		if !allowed[notificationType] {
 			c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "通知类型无效"})
 			return
@@ -387,10 +399,32 @@ func notificationPostMeta(db *gorm.DB, notifications []models.Notification) (map
 			posts[row.ID] = postMeta{Title: row.Title, Slug: row.Slug}
 		}
 	}
+	forumTopics := map[uint]postMeta{}
+	var forumTopicIDs []uint
+	for _, notification := range notifications {
+		if notification.Type == "forum_reply" || notification.Type == "forum_like" {
+			forumTopicIDs = append(forumTopicIDs, notification.ResourceID)
+		}
+	}
+	if len(forumTopicIDs) > 0 {
+		var topics []models.ForumTopic
+		if err := db.Select("id", "content").Where("id IN ?", forumTopicIDs).Find(&topics).Error; err != nil {
+			return nil, err
+		}
+		for _, topic := range topics {
+			forumTopics[topic.ID] = postMeta{Title: textExcerpt(topic.Content, 36), Slug: strconv.FormatUint(uint64(topic.ID), 10)}
+		}
+	}
 	meta := map[uint]postMeta{}
 	for _, notification := range notifications {
 		// follow 类通知的 resource_id 是关注者用户 ID，与文章 ID 不同空间，不能顺便填充
 		if notification.Type == "follow" {
+			continue
+		}
+		if notification.Type == "forum_reply" || notification.Type == "forum_like" {
+			if topic, ok := forumTopics[notification.ResourceID]; ok {
+				meta[notification.ID] = topic
+			}
 			continue
 		}
 		postID := notification.ResourceID
@@ -429,7 +463,7 @@ func (ic *InteractionController) MarkAllNotificationsRead(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
 }
 
-// CreateReport 举报文章或评论
+// CreateReport 举报文章、评论、论坛帖子或论坛回复。
 func (ic *InteractionController) CreateReport(c *gin.Context) {
 	userID := currentUserID(c)
 	var input struct {
@@ -443,7 +477,7 @@ func (ic *InteractionController) CreateReport(c *gin.Context) {
 	}
 	input.TargetType = strings.TrimSpace(input.TargetType)
 	input.Reason = strings.TrimSpace(input.Reason)
-	if input.TargetType != "post" && input.TargetType != "comment" {
+	if input.TargetType != "post" && input.TargetType != "comment" && input.TargetType != "forum_topic" && input.TargetType != "forum_reply" {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "举报目标类型无效"})
 		return
 	}
@@ -471,6 +505,26 @@ func (ic *InteractionController) CreateReport(c *gin.Context) {
 		}
 		if count == 0 {
 			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "举报的评论不存在"})
+			return
+		}
+	case "forum_topic":
+		var count int64
+		if err := ic.DB.Model(&models.ForumTopic{}).Where("id = ?", input.TargetID).Count(&count).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "检查举报目标失败"})
+			return
+		}
+		if count == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "举报的帖子不存在"})
+			return
+		}
+	case "forum_reply":
+		var count int64
+		if err := ic.DB.Model(&models.ForumReply{}).Where("id = ?", input.TargetID).Count(&count).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "检查举报目标失败"})
+			return
+		}
+		if count == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "举报的回复不存在"})
 			return
 		}
 	}
@@ -537,6 +591,20 @@ func (ic *InteractionController) reportDTO(report models.Report) AdminReportDTO 
 			item.TargetSlug = comment.Post.Slug
 			item.TargetStatus = comment.Status
 		}
+	case "forum_topic":
+		var topic models.ForumTopic
+		if err := ic.DB.Select("content", "status").First(&topic, report.TargetID).Error; err == nil {
+			item.TargetTitle = textExcerpt(topic.Content, 60)
+			item.TargetSlug = strconv.FormatUint(uint64(report.TargetID), 10)
+			item.TargetStatus = topic.Status
+		}
+	case "forum_reply":
+		var reply models.ForumReply
+		if err := ic.DB.Select("content", "status", "topic_id").First(&reply, report.TargetID).Error; err == nil {
+			item.TargetTitle = textExcerpt(reply.Content, 60)
+			item.TargetSlug = strconv.FormatUint(uint64(reply.TopicID), 10)
+			item.TargetStatus = reply.Status
+		}
 	}
 	return item
 }
@@ -555,10 +623,19 @@ func (ic *InteractionController) reportTargetSummary(report models.Report) strin
 		if err := ic.DB.Select("content").First(&comment, report.TargetID).Error; err != nil {
 			return "评论已删除"
 		}
-		if len(comment.Content) > 80 {
-			return "评论：" + comment.Content[:80] + "…"
+		return "评论：" + textExcerpt(comment.Content, 80)
+	case "forum_topic":
+		var topic models.ForumTopic
+		if err := ic.DB.Select("content").First(&topic, report.TargetID).Error; err != nil {
+			return "帖子已删除"
 		}
-		return "评论：" + comment.Content
+		return "帖子：" + textExcerpt(topic.Content, 80)
+	case "forum_reply":
+		var reply models.ForumReply
+		if err := ic.DB.Select("content").First(&reply, report.TargetID).Error; err != nil {
+			return "回复已删除"
+		}
+		return "回复：" + textExcerpt(reply.Content, 80)
 	}
 	return ""
 }

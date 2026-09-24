@@ -1,10 +1,12 @@
 import { ArrowUpRight, Clock3, Heart, MessageCircle } from 'lucide-react'
+import { memo } from 'react'
 import { Link } from 'react-router-dom'
 import type { PostSummary } from '../types'
 import { formatDate } from '../utils'
 import { CoverImage } from './CoverImage'
 
-export function PostCard({ post, featured = false, showAuthor = true }: { post: PostSummary; featured?: boolean; showAuthor?: boolean }) {
+// memo：列表页搜索框每次按键都会重渲染父组件，post 引用不变时卡片无需跟着重渲染
+export const PostCard = memo(function PostCard({ post, featured = false, showAuthor = true }: { post: PostSummary; featured?: boolean; showAuthor?: boolean }) {
   return (
     <article className={`post-card ${featured ? 'post-card-featured' : ''}`}>
       <Link to={`/posts/${post.slug}`} className="post-cover-link" aria-label={`阅读 ${post.title}`}>
@@ -28,4 +30,4 @@ export function PostCard({ post, featured = false, showAuthor = true }: { post: 
       </div>
     </article>
   )
-}
+})

@@ -89,6 +89,13 @@ func (a *AuthController) RequestEmailCode(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "message": "邮件服务尚未配置，请联系管理员"})
 		return
 	}
+	// 按邮箱限流：IP 限流管不住同一 IP 向大量不同邮箱发码（把本站当轰炸代理），
+	// 同一邮箱一分钟内只允许一条验证码
+	var latest models.EmailLoginCode
+	if err := a.DB.Where("email = ?", email).Order("created_at DESC").First(&latest).Error; err == nil && time.Since(latest.CreatedAt) < time.Minute {
+		c.JSON(http.StatusTooManyRequests, gin.H{"code": 429, "message": "验证码发送过于频繁，请一分钟后再试"})
+		return
+	}
 
 	var user models.User
 	userErr := a.DB.Where("email = ?", email).First(&user).Error
@@ -290,7 +297,7 @@ func (a *AuthController) sendEmailCode(to, code string) error {
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	if err := client.Auth(smtp.PlainAuth("", username, a.SMTPPassword, host)); err != nil {
 		return err
 	}

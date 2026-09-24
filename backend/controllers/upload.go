@@ -47,7 +47,7 @@ func (u *UploadController) Image(c *gin.Context) {
 	header := make([]byte, 512)
 	read, readErr := io.ReadFull(opened, header)
 	if readErr != nil && readErr != io.ErrUnexpectedEOF {
-		opened.Close()
+		_ = opened.Close()
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "图片文件内容无效"})
 		return
 	}
@@ -154,6 +154,13 @@ func referencedUploadNames(db *gorm.DB) (map[string]bool, error) {
 	for _, revision := range revisions {
 		add(revision.CoverImage)
 		add(revision.Content)
+	}
+	var forumImages []models.ForumTopicImage
+	if err := db.Select("url").Find(&forumImages).Error; err != nil {
+		return nil, err
+	}
+	for _, image := range forumImages {
+		add(image.URL)
 	}
 	return referenced, nil
 }

@@ -1,13 +1,16 @@
 import { ArrowLeft, ArrowRight, Bookmark, CalendarDays, ChevronDown, ChevronRight, Clock3, Eye, Flag, Heart, MessageCircle, Pencil, Pin, Share2, UserPlus, UserRoundCheck, Trash2 } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
 import { useEffect, useMemo, useState } from 'react'
-import { createComment, createReport, deleteComment, favoritePost, followUser, getComments, getCurrentUser, getPostBySlug, getUserProfile, likeComment, likePost, pinComment, recordPostView, unfavoritePost, unfollowUser, unlikeComment, unlikePost, type AdjacentPost, type AuthUser } from '../services/api'
+import { createComment, createReport, deleteComment, favoritePost, followUser, getComments, getPostBySlug, getUserProfile, likeComment, likePost, pinComment, recordPostView, unfavoritePost, unfollowUser, unlikeComment, unlikePost, type AdjacentPost } from '../services/api'
+import { useAuth } from '../services/auth'
+import { ReadingProgress } from '../components/ReadingProgress'
 import { CoverImage } from '../components/CoverImage'
 import { ConfirmDialog, NoticeDialog, PromptDialog } from '../components/Dialog'
 import { MarkdownContent } from '../components/MarkdownContent'
 import type { Comment, Post } from '../types'
 import { formatDate } from '../utils'
 import { extractMarkdownHeadings } from '../utils/markdown'
+import { usePageMeta } from '../utils/usePageMeta'
 
 // 评论树节点：顶层评论 + 挂在其下的回复（方案要求评论最多两层）
 type CommentNode = { comment: Comment; replies: Comment[] }
@@ -41,8 +44,12 @@ export function PostPage() {
   const [next, setNext] = useState<AdjacentPost | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [user, setUser] = useState<AuthUser>()
+  const { user } = useAuth()
+  usePageMeta(post?.title, post?.summary)
   const [comments, setComments] = useState<Comment[]>([])
+  const [commentPage, setCommentPage] = useState(1)
+  const [commentsTotal, setCommentsTotal] = useState(0)
+  const [commentsLoading, setCommentsLoading] = useState(false)
   const [commentInput, setCommentInput] = useState('')
   const [replyTo, setReplyTo] = useState<Comment>()
   const [commentSaving, setCommentSaving] = useState(false)
@@ -52,24 +59,36 @@ export function PostPage() {
   const [reportReason, setReportReason] = useState('')
   const [notice, setNotice] = useState<{ title: string; message: string }>()
   const [deleteRequest, setDeleteRequest] = useState<Comment>()
-  const [readProgress, setReadProgress] = useState(0)
   const [collapsedThreads, setCollapsedThreads] = useState<Set<number>>(new Set())
   const headings = useMemo(() => extractMarkdownHeadings(post?.content ?? ''), [post?.content])
+
+  // 顶层评论分页加载：第一页替换，后续页追加；回复由后端随父评论一并返回
+  const loadComments = async (postSlug: string, page: number) => {
+    setCommentsLoading(true)
+    try {
+      const data = await getComments(postSlug, { page, pageSize: 20 })
+      setComments((current) => page === 1 ? data.items : [...current, ...data.items])
+      setCommentsTotal(data.total)
+      setCommentPage(data.page)
+    } catch {
+      // 评论加载失败不阻塞正文阅读，保留已加载部分
+    } finally {
+      setCommentsLoading(false)
+    }
+  }
 
   useEffect(() => {
     if (!slug) return
     let active = true
     setLoading(true)
     setError('')
-    Promise.all([getPostBySlug(slug), getCurrentUser().catch(() => undefined)])
-      .then((detail) => {
+    getPostBySlug(slug)
+      .then((postDetail) => {
         if (!active) return
-        const [postDetail, currentUser] = detail
         setPost(postDetail.post)
         setPrevious(postDetail.previous)
         setNext(postDetail.next)
-        setUser(currentUser)
-        void getComments(postDetail.post.slug).then(setComments).catch(() => undefined)
+        void loadComments(postDetail.post.slug, 1)
         void getUserProfile(postDetail.post.author.username).then((profile) => { if (active) setFollowing(profile.followingMe) }).catch(() => undefined)
         const viewKey = `qs:viewed:${postDetail.post.slug}`
         let shouldRecord = true
@@ -89,20 +108,6 @@ export function PostPage() {
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [slug])
-
-  useEffect(() => {
-    const updateProgress = () => {
-      const available = document.documentElement.scrollHeight - window.innerHeight
-      setReadProgress(available > 0 ? Math.min(100, Math.max(0, (window.scrollY / available) * 100)) : 0)
-    }
-    updateProgress()
-    window.addEventListener('scroll', updateProgress, { passive: true })
-    window.addEventListener('resize', updateProgress)
-    return () => {
-      window.removeEventListener('scroll', updateProgress)
-      window.removeEventListener('resize', updateProgress)
-    }
-  }, [post?.id])
 
   const toggleLike = async () => {
     if (!post || !user) return
@@ -183,6 +188,7 @@ export function PostPage() {
       const parentId = replyTo ? replyTo.parentId ?? replyTo.id : undefined
       const comment = await createComment(post.slug, { content: commentInput.trim(), parentId, replyToUserId: replyTo?.author.id })
       setComments([...comments, comment])
+      if (!comment.parentId) setCommentsTotal((total) => total + 1)
       setCommentInput('')
       setReplyTo(undefined)
       setPost({ ...post, commentsCount: post.commentsCount + 1 })
@@ -206,6 +212,7 @@ export function PostPage() {
       // 后端会把该评论下的回复一并删除，前端同步移除，避免刷新前残留孤儿评论
       const removedReplies = comments.filter((item) => item.parentId === comment.id)
       setComments(comments.filter((item) => item.id !== comment.id && item.parentId !== comment.id))
+      if (!comment.parentId) setCommentsTotal((total) => Math.max(0, total - 1))
       setPost({ ...post, commentsCount: Math.max(0, post.commentsCount - 1 - removedReplies.length) })
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '删除评论失败')
@@ -250,7 +257,7 @@ export function PostPage() {
 
   return (
     <>
-      <div className="reading-progress" aria-hidden="true"><span style={{ width: `${readProgress}%` }} /></div>
+      <ReadingProgress />
       <article className="article-page">
       <header className="article-header container">
         <Link className="back-link" to="/posts"><ArrowLeft size={15} /> 返回文章列表</Link>
@@ -269,7 +276,7 @@ export function PostPage() {
         {previous ? <Link to={`/posts/${previous.slug}`} className="article-nav-item"><span><ArrowLeft size={15} /> 上一篇</span><strong>{previous.title}</strong></Link> : <span />}
         {next ? <Link to={`/posts/${next.slug}`} className="article-nav-item align-right"><span>下一篇 <ArrowRight size={15} /></span><strong>{next.title}</strong></Link> : <span />}
       </div>
-      <section className="container comments-section" id="comments"><div className="comments-heading"><div><div className="eyebrow">Discussion</div><h2>评论 {post.commentsCount}</h2></div>{!user && <Link className="text-button" to="/login">登录后参与 <ArrowRight size={15} /></Link>}</div>{user && <div className="comment-composer">{replyTo && <div className="replying">回复 @{replyTo.author.username} <button onClick={() => setReplyTo(undefined)}>取消</button></div>}<textarea value={commentInput} onChange={(event) => setCommentInput(event.target.value)} placeholder="写下你的看法" rows={4} /><button className="button button-dark" onClick={() => void submitComment()} disabled={commentSaving || !commentInput.trim()}><MessageCircle size={15} /> {commentSaving ? '发送中' : '发表评论'}</button></div>}<div className="comments-list">{commentTree.length ? commentTree.map((node) => { const collapsed = collapsedThreads.has(node.comment.id); return <div className="comment-thread" key={node.comment.id}>{renderComment(node.comment, false)}{node.replies.length > 0 && <><button className="comment-collapse" onClick={() => toggleThread(node.comment.id)}>{collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />} {collapsed ? `展开 ${node.replies.length} 条回复` : `收起 ${node.replies.length} 条回复`}</button>{!collapsed && <div className="comment-replies">{node.replies.map((reply) => renderComment(reply, true))}</div>}</>}</div> }) : <div className="empty-state comments-empty"><h2>还没有评论</h2><p>成为第一个留下观点的人。</p></div>}</div></section>
+      <section className="container comments-section" id="comments"><div className="comments-heading"><div><div className="eyebrow">Discussion</div><h2>评论 {post.commentsCount}</h2></div>{!user && <Link className="text-button" to={`/login?from=${encodeURIComponent(`/posts/${post.slug}`)}`}>登录后参与 <ArrowRight size={15} /></Link>}</div>{user && <div className="comment-composer">{replyTo && <div className="replying">回复 @{replyTo.author.username} <button onClick={() => setReplyTo(undefined)}>取消</button></div>}<textarea value={commentInput} onChange={(event) => setCommentInput(event.target.value)} placeholder="写下你的看法" rows={4} /><button className="button button-dark" onClick={() => void submitComment()} disabled={commentSaving || !commentInput.trim()}><MessageCircle size={15} /> {commentSaving ? '发送中' : '发表评论'}</button></div>}<div className="comments-list">{commentTree.length ? commentTree.map((node) => { const collapsed = collapsedThreads.has(node.comment.id); return <div className="comment-thread" key={node.comment.id}>{renderComment(node.comment, false)}{node.replies.length > 0 && <><button className="comment-collapse" onClick={() => toggleThread(node.comment.id)}>{collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />} {collapsed ? `展开 ${node.replies.length} 条回复` : `收起 ${node.replies.length} 条回复`}</button>{!collapsed && <div className="comment-replies">{node.replies.map((reply) => renderComment(reply, true))}</div>}</>}</div> }) : <div className="empty-state comments-empty"><h2>还没有评论</h2><p>成为第一个留下观点的人。</p></div>}</div>{commentTree.length < commentsTotal && <button className="text-button comments-load-more" onClick={() => void loadComments(post.slug, commentPage + 1)} disabled={commentsLoading}>{commentsLoading ? '正在读取。' : '加载更多评论（还有 ' + (commentsTotal - commentTree.length) + ' 条）'}</button>}</section>
       </article>
       <PromptDialog open={Boolean(reportRequest)} title={reportRequest?.title ?? ''} message="请输入举报理由，管理员审核后会处理。" value={reportReason} placeholder="例如：内容涉及广告、骚扰或违规信息" onChange={setReportReason} onSubmit={submitReport} onCancel={() => { setReportRequest(undefined); setReportReason('') }} />
       <ConfirmDialog open={Boolean(deleteRequest)} title="删除评论" message="确定删除这条评论吗？它下面的回复也会一并删除。" onCancel={() => setDeleteRequest(undefined)} onConfirm={confirmRemoveComment} />

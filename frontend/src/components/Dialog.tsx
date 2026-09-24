@@ -1,5 +1,5 @@
 import { AlertTriangle, Check, X } from 'lucide-react'
-import type { FormEvent, ReactNode } from 'react'
+import { useEffect, useRef, type FormEvent, type ReactNode } from 'react'
 
 type DialogBaseProps = {
   open: boolean
@@ -22,8 +22,18 @@ type PromptDialogProps = DialogBaseProps & {
 }
 
 function DialogFrame({ title, message, onCancel, children, tone = 'warning' }: DialogBaseProps & { children: ReactNode; tone?: 'warning' | 'success' }) {
+  const modalRef = useRef<HTMLElement>(null)
+
+  // Esc 关闭 + 打开时焦点移入对话框（键盘与读屏用户的基础可用性）
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') onCancel() }
+    document.addEventListener('keydown', onKeyDown)
+    modalRef.current?.querySelector<HTMLElement>('textarea, button')?.focus()
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [onCancel])
+
   return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onCancel() }}>
-    <section className="dialog-modal" role="dialog" aria-modal="true" aria-labelledby="dialog-title" onMouseDown={(event) => event.stopPropagation()}>
+    <section ref={modalRef} className="dialog-modal" role="dialog" aria-modal="true" aria-labelledby="dialog-title" onMouseDown={(event) => event.stopPropagation()}>
       <div className="dialog-head">
         <div className={`dialog-icon dialog-icon-${tone}`}>{tone === 'warning' ? <AlertTriangle size={18} /> : <Check size={18} />}</div>
         <button className="icon-button" onClick={onCancel} aria-label="关闭"><X size={17} /></button>

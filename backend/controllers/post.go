@@ -19,6 +19,8 @@ import (
 type PostController struct {
 	DB        *gorm.DB
 	UploadDir string
+	// Views 浏览量缓冲计数器；为空时退化为逐次写库（测试场景）
+	Views *ViewCounter
 }
 
 // interactionSets 批量查询当前用户对一组文章的点赞与收藏状态。
@@ -137,8 +139,7 @@ func (p *PostController) list(c *gin.Context, status string, includeDrafts bool)
 		query = query.Where("moderation_status = ?", "normal")
 	}
 	if keyword := strings.TrimSpace(c.Query("q")); keyword != "" {
-		like := likePattern(keyword)
-		query = query.Where("title LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\'", like, like, like)
+		query = postSearchCondition(query, keyword)
 	}
 	if tag := strings.TrimSpace(c.Query("tag")); tag != "" {
 		query = query.Where("EXISTS (SELECT 1 FROM post_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.post_id = posts.id AND (t.name = ? OR t.slug = ?))", tag, tag)
@@ -192,21 +193,23 @@ func (p *PostController) Detail(c *gin.Context) {
 }
 
 func (p *PostController) RecordView(c *gin.Context) {
-	result := p.DB.Model(&models.Post{}).Where("slug = ? AND status = ? AND moderation_status = ?", c.Param("slug"), "published", "normal").UpdateColumn("views", gorm.Expr("views + ?", 1))
-	if result.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新阅读量失败"})
-		return
-	}
-	if result.RowsAffected == 0 {
+	var post models.Post
+	if err := p.DB.Select("id", "views").Where("slug = ? AND status = ? AND moderation_status = ?", c.Param("slug"), "published", "normal").First(&post).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "文章不存在"})
 		return
 	}
-	var post models.Post
-	if err := p.DB.Select("views").Where("slug = ?", c.Param("slug")).First(&post).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取阅读量失败"})
+	if p.Views == nil {
+		// 无缓冲计数器（测试）时保持逐次写库的旧行为
+		if err := p.DB.Model(&models.Post{}).Where("id = ?", post.ID).UpdateColumn("views", gorm.Expr("views + ?", 1)).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "更新阅读量失败"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"views": post.Views + 1, "counted": true}})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"views": post.Views}})
+	counted := p.Views.Add(post.ID, c.ClientIP())
+	// 返回值包含未刷盘增量，前端立刻看到 +1，不必等批量写回
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"views": post.Views + p.Views.Pending(post.ID), "counted": counted}})
 }
 
 func (p *PostController) AdminStats(c *gin.Context) {
@@ -369,12 +372,8 @@ func (p *PostController) Delete(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "删除文章失败"})
 		return
 	}
-	if p.UploadDir != "" {
-		if _, err := cleanupUnreferencedUploads(p.UploadDir, p.DB); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "文章已删除，但图片清理失败"})
-			return
-		}
-	}
+	// 孤儿图片由每日清理任务统一回收（RunDataCleanup），删除路径不再同步
+	// 扫描全部文章内容——文章量大后这会拖慢每一次删除操作
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
 }
 

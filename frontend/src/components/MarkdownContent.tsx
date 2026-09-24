@@ -1,5 +1,6 @@
 import { Children, isValidElement, type ReactNode } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import remarkGfm from 'remark-gfm'
 import { createHeadingSlugger } from '../utils/markdown'
 
@@ -20,5 +21,9 @@ export function MarkdownContent({ content, className }: { content: string; class
   }
   const components: Components = { h1: heading(1), h2: heading(2), h3: heading(3) }
 
-  return <div className={className}><ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>{content}</ReactMarkdown></div>
+  // 显式 sanitize：不能永远依赖「没人启用 rehype-raw」这一约定来防 XSS，
+  // 默认 schema 已覆盖 Markdown 可生成的全部元素；clobberPrefix 关闭以保留空 id
+  const schema = { ...defaultSchema, clobber: [], attributes: { ...defaultSchema.attributes, '*': [...(defaultSchema.attributes?.['*'] ?? []), 'id'] } }
+
+  return <div className={className}><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[[rehypeSanitize, schema]]} components={components}>{content}</ReactMarkdown></div>
 }

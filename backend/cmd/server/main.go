@@ -49,14 +49,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("connect database: %v", err)
 	}
-	if err := migrateDB.AutoMigrate(&models.User{}, &models.EmailLoginCode{}, &models.Post{}, &models.Tag{}, &models.Comment{}, &models.PostLike{}, &models.Follow{}, &models.Category{}, &models.Favorite{}, &models.CommentLike{}, &models.Notification{}, &models.Report{}, &models.AdminLog{}, &models.Setting{}, &models.PostRevision{}); err != nil {
+	if err := migrateDB.AutoMigrate(&models.User{}, &models.EmailLoginCode{}, &models.Post{}, &models.Tag{}, &models.Comment{}, &models.PostLike{}, &models.Follow{}, &models.Category{}, &models.Favorite{}, &models.CommentLike{}, &models.Notification{}, &models.Report{}, &models.AdminLog{}, &models.Setting{}, &models.PostRevision{}, &models.ForumTopic{}, &models.ForumTopicImage{}, &models.ForumReply{}, &models.ForumTopicLike{}, &models.ForumReplyLike{}); err != nil {
 		log.Fatalf("migrate database: %v", err)
 	}
 	if err := models.EnsureIndexes(migrateDB); err != nil {
 		log.Fatalf("create database indexes: %v", err)
 	}
 	if sqlDB, err := migrateDB.DB(); err == nil {
-		sqlDB.Close()
+		_ = sqlDB.Close()
 	}
 	// 运行时连接保持外键开启，由数据库兜底引用完整性
 	dsn := cfg.DatabasePath + separator + "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
@@ -67,17 +67,24 @@ func main() {
 	if err := models.Seed(db, cfg.AdminUsername, cfg.AdminPassword); err != nil {
 		log.Fatalf("seed database: %v", err)
 	}
+	// 全文搜索索引（FTS5 trigram）；不可用时自动退化为 LIKE，见 controllers/search.go
+	controllers.SetupPostSearch(db)
 	if err := controllers.PublishScheduledPosts(db, time.Now()); err != nil {
 		log.Printf("publish scheduled posts: %v", err)
 	}
 	schedulerCtx, stopScheduler := context.WithCancel(context.Background())
 	defer stopScheduler()
 	go controllers.RunScheduledPublisher(schedulerCtx, db)
+	// 浏览量缓冲计数：周期刷盘，ctx 取消时收尾刷一次
+	viewCounter := controllers.NewViewCounter(db)
+	go viewCounter.Run(schedulerCtx)
+	// 过期数据与孤儿图片的每日清理
+	go controllers.RunDataCleanup(schedulerCtx, db, cfg.UploadDir)
 
 	r := gin.New()
 	r.Static("/uploads", cfg.UploadDir)
 	r.Use(gin.Logger(), gin.Recovery(), cors.New(corsConfig(cfg.AllowedOrigins, gin.Mode() != gin.ReleaseMode)))
-	routes.Register(r, routes.Dependencies{Posts: &controllers.PostController{DB: db, UploadDir: cfg.UploadDir}, Community: &controllers.CommunityController{DB: db, UploadDir: cfg.UploadDir}, Interactions: &controllers.InteractionController{DB: db}, Tags: &controllers.TagController{DB: db}, Auth: &controllers.AuthController{DB: db, Secret: cfg.JWTSecret, CookieSecure: cfg.CookieSecure, SMTPHost: cfg.SMTPHost, SMTPPort: cfg.SMTPPort, SMTPUsername: cfg.SMTPUsername, SMTPPassword: cfg.SMTPPassword, SMTPFrom: cfg.SMTPFrom, EmailCodeTTL: cfg.EmailCodeTTL}, Uploads: &controllers.UploadController{Dir: cfg.UploadDir, DB: db}, Secret: cfg.JWTSecret, DB: db})
+	routes.Register(r, routes.Dependencies{Posts: &controllers.PostController{DB: db, UploadDir: cfg.UploadDir, Views: viewCounter}, Community: &controllers.CommunityController{DB: db, UploadDir: cfg.UploadDir}, Forum: &controllers.ForumController{DB: db}, Interactions: &controllers.InteractionController{DB: db}, Tags: &controllers.TagController{DB: db}, Auth: &controllers.AuthController{DB: db, Secret: cfg.JWTSecret, CookieSecure: cfg.CookieSecure, SMTPHost: cfg.SMTPHost, SMTPPort: cfg.SMTPPort, SMTPUsername: cfg.SMTPUsername, SMTPPassword: cfg.SMTPPassword, SMTPFrom: cfg.SMTPFrom, EmailCodeTTL: cfg.EmailCodeTTL}, Uploads: &controllers.UploadController{Dir: cfg.UploadDir, DB: db}, Secret: cfg.JWTSecret, DB: db})
 
 	log.Printf("quiet signal api listening on :%s", cfg.Port)
 	server := &http.Server{

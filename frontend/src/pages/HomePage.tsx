@@ -1,31 +1,32 @@
 import { ArrowDownRight, ArrowUpRight, Command } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { PostCard } from '../components/PostCard'
+import { SkeletonPostGrid } from '../components/Skeleton'
 import { SectionHeading } from '../components/SectionHeading'
 import { CoverImage } from '../components/CoverImage'
-import { getFeed, getTrendingTags } from '../services/api'
+import { getFeed } from '../services/api'
+import { useQuery } from '@tanstack/react-query'
+import { useTrendingTags } from '../services/queries'
 import type { PostSummary } from '../types'
 import { formatDate } from '../utils'
+import { usePageMeta } from '../utils/usePageMeta'
 
 export function HomePage() {
+  usePageMeta()
   const currentYear = new Date().getFullYear()
-  const [posts, setPosts] = useState<PostSummary[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [trendingTags, setTrendingTags] = useState<string[]>([])
-
-  useEffect(() => {
-    Promise.all([getFeed({ mode: 'latest', pageSize: 12 }), getTrendingTags({ limit: 8 })])
-      .then(([data, tags]) => { setPosts(data.items); setTrendingTags(tags.map((tag) => tag.name)) })
-      .catch((reason: Error) => setError(reason.message))
-      .finally(() => setLoading(false))
-  }, [])
+  // 热门标签失败不再拖垮整页（此前 Promise.all 任一失败即整页报错）
+  const feedQuery = useQuery({ queryKey: ['feed', 'home-latest'], queryFn: () => getFeed({ mode: 'latest', pageSize: 12 }) })
+  const trendingQuery = useTrendingTags(8)
+  const posts: PostSummary[] = feedQuery.data?.items ?? []
+  const loading = feedQuery.isLoading
+  const error = feedQuery.error?.message ?? ''
+  const trendingTags = useMemo(() => trendingQuery.data?.map((tag) => tag.name) ?? [], [trendingQuery.data])
 
   const featured = posts.find((post) => post.featured) ?? posts[0]
   const allTags = useMemo(() => trendingTags.length ? trendingTags : Array.from(new Set(posts.flatMap((post) => post.tags))), [posts, trendingTags])
 
-  if (loading) return <div className="container page-state"><span className="eyebrow">Loading notes</span><h1>正在读取文章。</h1></div>
+  if (loading) return <div className="container" style={{ paddingTop: 40 }}><SkeletonPostGrid count={6} /></div>
   if (error) return <div className="container page-state"><span className="eyebrow">Connection error</span><h1>文章暂时无法加载。</h1><p>{error}</p></div>
   if (!featured) return <div className="container page-state"><span className="eyebrow">No published posts</span><h1>还没有公开文章。</h1></div>
 

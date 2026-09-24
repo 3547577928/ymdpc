@@ -8,7 +8,9 @@ import { MarkdownImportButton } from '../components/MarkdownImportButton'
 import { CategoryField } from '../components/CategoryField'
 import { MarkdownImageUploadButton } from '../components/MarkdownImageUploadButton'
 import { ConfirmDialog } from '../components/Dialog'
-import { createUserPost, getCategories, getCurrentUser, getPostById, getPostRevisions, restorePostRevision, updateUserPost, type PostInput } from '../services/api'
+import { createUserPost, getCategories, getPostById, getPostRevisions, restorePostRevision, updateUserPost, type PostInput } from '../services/api'
+import { useAuth } from '../services/auth'
+import { usePageMeta } from '../utils/usePageMeta'
 import type { Category, Post, PostRevision } from '../types'
 import { clearPostDraft, hasDraftContent, loadPostDraft, savePostDraft, type StoredPostDraft } from '../utils/draftStorage'
 
@@ -26,6 +28,7 @@ export function WritePage() {
   const { id } = useParams()
   const editingID = id ? Number(id) : undefined
   const storageKey = useMemo(() => `qs:editor-draft:${editingID ?? 'new'}`, [editingID])
+  usePageMeta(id ? '编辑文章' : '写文章')
   const [draft, setDraft] = useState<PostInput>(initialDraft)
   const [categories, setCategories] = useState<Category[]>([])
   const [saving, setSaving] = useState(false)
@@ -44,9 +47,14 @@ export function WritePage() {
     getCategories().then(setCategories).catch(() => undefined)
   }, [])
 
+  // 登录态由 AuthProvider 提供：探测中保持 loading，确认未登录再跳登录页，
+  // 避免已登录用户因 me 请求尚未返回而被误踢
+  const { user, loading: authLoading } = useAuth()
   useEffect(() => {
-    getCurrentUser().catch(() => navigate('/login')).finally(() => setChecking(false))
-  }, [navigate])
+    if (authLoading) return
+    if (!user) navigate(`/login?from=${encodeURIComponent(window.location.pathname)}`)
+    else setChecking(false)
+  }, [user, authLoading, navigate])
 
   useEffect(() => {
     let active = true

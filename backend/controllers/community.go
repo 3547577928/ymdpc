@@ -3,6 +3,7 @@ package controllers
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +31,8 @@ type UserDTO struct {
 type CommunityController struct {
 	DB        *gorm.DB
 	UploadDir string
+	// StatsCache UserStats 的 60 秒进程内缓存，见 admin.go
+	StatsCache SiteStatsCache
 }
 
 func currentUserID(c *gin.Context) uint {
@@ -52,6 +55,33 @@ func currentUserID(c *gin.Context) uint {
 func currentUserIsAdmin(c *gin.Context) bool {
 	role, ok := c.Get("userRole")
 	return ok && role == "admin"
+}
+
+// interestProfile 汇总用户的关注作者、点赞/收藏文章的标签与分类 ID 集合，
+// 供推荐排序拼成常量 IN 列表；每个集合带上限，防御极端活跃账号
+func (cc *CommunityController) interestProfile(userID uint) (authorIDs, tagIDs, categoryIDs []uint) {
+	cc.DB.Model(&models.Follow{}).Where("follower_id = ?", userID).Limit(500).Pluck("following_id", &authorIDs)
+	cc.DB.Raw(`SELECT DISTINCT pt.tag_id FROM post_tags pt WHERE pt.post_id IN (
+		SELECT post_id FROM post_likes WHERE user_id = ?
+		UNION SELECT post_id FROM favorites WHERE user_id = ?
+	) LIMIT 500`, userID, userID).Scan(&tagIDs)
+	cc.DB.Raw(`SELECT DISTINCT category_id FROM posts WHERE category_id IS NOT NULL AND id IN (
+		SELECT post_id FROM post_likes WHERE user_id = ?
+		UNION SELECT post_id FROM favorites WHERE user_id = ?
+	) LIMIT 500`, userID, userID).Scan(&categoryIDs)
+	return authorIDs, tagIDs, categoryIDs
+}
+
+// uintInList 把 ID 集合格式化为 SQL IN 列表；ID 来自数据库无注入风险，空集返回 -1 不匹配任何行
+func uintInList(ids []uint) string {
+	if len(ids) == 0 {
+		return "-1"
+	}
+	parts := make([]string, len(ids))
+	for i, id := range ids {
+		parts[i] = strconv.FormatUint(uint64(id), 10)
+	}
+	return strings.Join(parts, ",")
 }
 
 // ensureActiveUser 校验当前登录用户存在且未被禁言/封禁，方案要求禁言用户不能发布文章或评论
@@ -77,8 +107,7 @@ func (cc *CommunityController) Feed(c *gin.Context) {
 	page, pageSize := pagination(c)
 	query := cc.DB.Model(&models.Post{}).Where("posts.status = ? AND posts.moderation_status = ?", "published", "normal")
 	if keyword := strings.TrimSpace(c.Query("q")); keyword != "" {
-		like := likePattern(keyword)
-		query = query.Where("posts.title LIKE ? ESCAPE '\\' OR posts.summary LIKE ? ESCAPE '\\' OR posts.content LIKE ? ESCAPE '\\'", like, like, like)
+		query = postSearchCondition(query, keyword)
 	}
 	if tag := strings.TrimSpace(c.Query("tag")); tag != "" {
 		query = query.Where("EXISTS (SELECT 1 FROM post_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.post_id = posts.id AND (t.name = ? OR t.slug = ?))", tag, tag)
@@ -108,25 +137,17 @@ func (cc *CommunityController) Feed(c *gin.Context) {
 		if userID == 0 {
 			order = "((posts.likes_count * 4 + posts.comments_count * 6 + posts.views / 100.0) / max((julianday('now') - julianday(posts.published_at)) * 24.0, 2.0)) DESC, posts.published_at DESC, posts.id DESC"
 		} else {
-			// 推荐分由关注作者、用户点赞/收藏过的标签与分类、文章互动量组成。
-			// userID 来自已解析的 JWT 数字，不包含用户输入，直接拼入固定 SQL 是 SQLite
-			// 当前最兼容的写法，也避免为每篇文章加载推荐数据造成 N+1 查询。
+			// 预取用户兴趣画像（关注作者、点赞/收藏过的标签与分类），拼成常量 IN 列表：
+			// 旧实现把 5 个相关子查询塞进每一行的评分表达式，数据量越大越慢；
+			// 同时推荐候选收窄到近 90 天，老文章不参与评分，行数也降下来
+			authorIDs, tagIDs, categoryIDs := cc.interestProfile(userID)
+			query = query.Where("posts.published_at >= ?", time.Now().AddDate(0, 0, -90))
 			order = fmt.Sprintf(`(
-				CASE WHEN posts.author_id IN (SELECT following_id FROM follows WHERE follower_id = %d) THEN 40 ELSE 0 END +
-				(SELECT COUNT(*) * 8 FROM post_tags rec_pt WHERE rec_pt.post_id = posts.id AND rec_pt.tag_id IN (
-					SELECT pt.tag_id FROM post_tags pt WHERE pt.post_id IN (
-						SELECT pl.post_id FROM post_likes pl WHERE pl.user_id = %d
-						UNION SELECT fa.post_id FROM favorites fa WHERE fa.user_id = %d
-					)
-				)) +
-				CASE WHEN posts.category_id IS NOT NULL AND posts.category_id IN (
-					SELECT p.category_id FROM posts p WHERE p.id IN (
-						SELECT pl.post_id FROM post_likes pl WHERE pl.user_id = %d
-						UNION SELECT fa.post_id FROM favorites fa WHERE fa.user_id = %d
-					) AND p.category_id IS NOT NULL
-				) THEN 12 ELSE 0 END +
+				CASE WHEN posts.author_id IN (%s) THEN 40 ELSE 0 END +
+				(SELECT COUNT(*) * 8 FROM post_tags rec_pt WHERE rec_pt.post_id = posts.id AND rec_pt.tag_id IN (%s)) +
+				CASE WHEN posts.category_id IS NOT NULL AND posts.category_id IN (%s) THEN 12 ELSE 0 END +
 				posts.likes_count * 2 + posts.comments_count * 3 + posts.favorite_count * 2 + posts.views / 100.0
-			) / max((julianday('now') - julianday(posts.published_at)) * 24.0, 2.0) DESC, posts.published_at DESC, posts.id DESC`, userID, userID, userID, userID, userID)
+			) / max((julianday('now') - julianday(posts.published_at)) * 24.0, 2.0) DESC, posts.published_at DESC, posts.id DESC`, uintInList(authorIDs), uintInList(tagIDs), uintInList(categoryIDs))
 		}
 	}
 	var total int64
@@ -299,12 +320,7 @@ func (cc *CommunityController) DeletePost(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "删除文章失败"})
 		return
 	}
-	if cc.UploadDir != "" {
-		if _, err := cleanupUnreferencedUploads(cc.UploadDir, cc.DB); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "文章已删除，但图片清理失败"})
-			return
-		}
-	}
+	// 孤儿图片由每日清理任务统一回收（RunDataCleanup）
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
 }
 

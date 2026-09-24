@@ -15,6 +15,9 @@ func EnsureIndexes(db *gorm.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_favorites_post_user ON favorites(post_id, user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_comment_likes_comment_user ON comment_likes(comment_id, user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_post_tags_tag_post ON post_tags(tag_id, post_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_forum_topics_public_order ON forum_topics(status, created_at, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_forum_topics_kind_order ON forum_topics(kind, status, created_at, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_forum_replies_topic_status_created ON forum_replies(topic_id, status, created_at, id)`,
 	}
 	for _, statement := range statements {
 		if err := db.Exec(statement).Error; err != nil {

@@ -1,9 +1,13 @@
 import { ArrowLeft, Bell, CheckCheck, Heart, MessageCircle, Newspaper, Reply, UserPlus } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { getNotifications, markAllNotificationsRead, markNotificationRead } from '../services/api'
+import { useQueryClient } from '@tanstack/react-query'
+import { markAllNotificationsRead, markNotificationRead } from '../services/api'
+import { UNREAD_QUERY_KEY, useNotificationList, type NotificationFilter } from '../services/queries'
+import { SkeletonList } from '../components/Skeleton'
 import type { NotificationItem } from '../types'
 import { formatDate } from '../utils'
+import { usePageMeta } from '../utils/usePageMeta'
 
 const typeMeta: Record<NotificationItem['type'], { icon: typeof Bell; text: (item: NotificationItem) => string }> = {
   comment: { icon: MessageCircle, text: (item) => `评论了你的文章《${item.resourceTitle ?? ''}》` },
@@ -11,6 +15,8 @@ const typeMeta: Record<NotificationItem['type'], { icon: typeof Bell; text: (ite
   like: { icon: Heart, text: (item) => `赞了你的文章《${item.resourceTitle ?? ''}》` },
   follow: { icon: UserPlus, text: () => '关注了你' },
   post: { icon: Newspaper, text: (item) => `发布了新文章《${item.resourceTitle ?? ''}》` },
+  forum_reply: { icon: Reply, text: (item) => `回复了你的帖子「${item.resourceTitle ?? ''}」` },
+  forum_like: { icon: Heart, text: (item) => `赞了你的帖子或回复「${item.resourceTitle ?? ''}」` },
 }
 
 function groupNotificationItems(items: NotificationItem[]) {
@@ -34,43 +40,34 @@ function groupNotificationItems(items: NotificationItem[]) {
 
 // 通知中心：展示评论、回复、点赞、关注四类通知，点击跳转并标记已读
 export function NotificationsPage() {
+  usePageMeta('通知')
   const navigate = useNavigate()
-  const [items, setItems] = useState<NotificationItem[]>([])
-  const [unread, setUnread] = useState(0)
-  const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [filter, setFilter] = useState<'all' | 'unread' | NotificationItem['type']>('all')
+  const [filter, setFilter] = useState<NotificationFilter>('all')
   const pageSize = 20
+  const queryClient = useQueryClient()
+  const listQuery = useNotificationList(page, pageSize, filter)
+  const items = groupNotificationItems(listQuery.data?.items ?? [])
+  const unread = listQuery.data?.unread ?? 0
+  const total = listQuery.data?.total ?? 0
+  const loading = listQuery.isLoading
+  const error = listQuery.error?.message ?? ''
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const data = await getNotifications({ page, pageSize, type: filter === 'all' || filter === 'unread' ? undefined : filter, unread: filter === 'unread' })
-      setItems(groupNotificationItems(data.items))
-      setUnread(data.unread)
-      setTotal(data.total)
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '读取通知失败')
-    } finally {
-      setLoading(false)
-    }
-  }, [filter, page])
+  // 已读状态变化后同步刷新列表与全局未读角标缓存（Shell 的铃铛读这份缓存）
+  const syncReadState = (nextUnread?: number) => {
+    if (nextUnread !== undefined) queryClient.setQueryData(UNREAD_QUERY_KEY, nextUnread)
+    void queryClient.invalidateQueries({ queryKey: ['notifications', 'list'] })
+  }
 
   const markAllRead = async () => {
     try {
       await markAllNotificationsRead()
-      setItems((current) => current.map((item) => ({ ...item, read: true })))
-      setUnread(0)
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '更新通知失败')
+      syncReadState(0)
+    } catch {
+      // 失败时重新拉取，保证展示与后端一致
+      syncReadState()
     }
   }
-
-  useEffect(() => {
-    void load()
-  }, [load])
 
   const changeFilter = (next: typeof filter) => {
     setFilter(next)
@@ -81,10 +78,13 @@ export function NotificationsPage() {
   const open = async (item: NotificationItem) => {
     if (!item.read) {
       await Promise.all((item.groupedIds ?? [item.id]).map((id) => markNotificationRead(id).catch(() => undefined)))
+      // 角标即时更新：减去刚读掉的条数，不必等 SSE 或轮询
+      syncReadState(Math.max(0, unread - (item.groupedIds?.length ?? 1)))
     }
     if (item.type === 'follow') navigate(`/users/${item.actor.username}`)
+    else if (item.resourceSlug && (item.type === 'forum_reply' || item.type === 'forum_like')) navigate(`/forum/${item.resourceSlug}`)
     else if (item.resourceSlug) navigate(`/posts/${item.resourceSlug}${item.type === 'post' ? '' : '#comments'}`)
-    else void load()
+    else syncReadState()
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
@@ -93,8 +93,8 @@ export function NotificationsPage() {
     <div className="write-topbar"><Link className="back-link" to="/"><ArrowLeft size={15} /> 返回社区</Link><span className="eyebrow">Notifications</span></div>
     <div className="notifications-heading"><h1>通知中心 {unread > 0 && <small className="unread-badge">{unread} 条未读</small>}</h1>{unread > 0 && <button className="text-button" onClick={() => void markAllRead()}><CheckCheck size={15} /> 全部已读</button>}</div>
     {error && <div className="form-error">{error}</div>}
-    <div className="notification-filters">{[['all', '全部'], ['unread', '未读'], ['comment', '评论'], ['reply', '回复'], ['like', '点赞'], ['follow', '关注'], ['post', '作者更新']].map(([value, label]) => <button key={value} className={filter === value ? 'is-active' : ''} onClick={() => changeFilter(value as typeof filter)}>{label}</button>)}</div>
-    {loading ? <div className="page-state"><h1>正在读取。</h1></div> : items.length ? <div className="notifications-list">
+    <div className="notification-filters">{[['all', '全部'], ['unread', '未读'], ['comment', '文章评论'], ['reply', '评论回复'], ['like', '文章点赞'], ['forum_reply', '帖子回复'], ['forum_like', '帖子点赞'], ['follow', '关注'], ['post', '作者更新']].map(([value, label]) => <button key={value} className={filter === value ? 'is-active' : ''} onClick={() => changeFilter(value as typeof filter)}>{label}</button>)}</div>
+    {loading ? <SkeletonList count={6} /> : items.length ? <div className="notifications-list">
       {items.map((item) => {
         const meta = typeMeta[item.type]
         const Icon = meta.icon

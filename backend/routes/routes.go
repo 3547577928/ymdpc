@@ -13,6 +13,7 @@ import (
 type Dependencies struct {
 	Posts        *controllers.PostController
 	Community    *controllers.CommunityController
+	Forum        *controllers.ForumController
 	Interactions *controllers.InteractionController
 	Tags         *controllers.TagController
 	Auth         *controllers.AuthController
@@ -40,6 +41,7 @@ func Register(r *gin.Engine, deps Dependencies) {
 	api.GET("/me/posts", middleware.RequireAuth(deps.Secret, deps.DB), deps.Interactions.MyPosts)
 	api.GET("/me/favorites", middleware.RequireAuth(deps.Secret, deps.DB), deps.Interactions.MyFavorites)
 	api.GET("/notifications", middleware.RequireAuth(deps.Secret, deps.DB), deps.Interactions.Notifications)
+	api.GET("/notifications/stream", middleware.RequireAuth(deps.Secret, deps.DB), deps.Interactions.NotificationStream)
 	api.PATCH("/notifications/:id/read", middleware.RequireAuth(deps.Secret, deps.DB), deps.Interactions.MarkNotificationRead)
 	api.POST("/notifications/read-all", middleware.RequireAuth(deps.Secret, deps.DB), deps.Interactions.MarkAllNotificationsRead)
 	api.POST("/reports", writeLimit, middleware.RequireAuth(deps.Secret, deps.DB), deps.Interactions.CreateReport)
@@ -48,6 +50,16 @@ func Register(r *gin.Engine, deps Dependencies) {
 	api.GET("/trending/tags", deps.Interactions.TrendingTags)
 	api.POST("/categories", writeLimit, middleware.RequireAuth(deps.Secret, deps.DB), deps.Interactions.CreateCategory)
 	api.GET("/feed", middleware.OptionalAuth(deps.Secret, deps.DB), deps.Community.Feed)
+	api.GET("/forum", middleware.OptionalAuth(deps.Secret, deps.DB), deps.Forum.ListTopics)
+	api.POST("/forum", writeLimit, middleware.RequireAuth(deps.Secret, deps.DB), deps.Forum.CreateTopic)
+	api.GET("/forum/:id", middleware.OptionalAuth(deps.Secret, deps.DB), deps.Forum.TopicDetail)
+	api.DELETE("/forum/:id", writeLimit, middleware.RequireAuth(deps.Secret, deps.DB), deps.Forum.DeleteTopic)
+	api.POST("/forum/:id/like", writeLimit, middleware.RequireAuth(deps.Secret, deps.DB), deps.Forum.LikeTopic)
+	api.DELETE("/forum/:id/like", middleware.RequireAuth(deps.Secret, deps.DB), deps.Forum.UnlikeTopic)
+	api.POST("/forum/:id/replies", writeLimit, middleware.RequireAuth(deps.Secret, deps.DB), deps.Forum.CreateReply)
+	api.DELETE("/forum/replies/:id", writeLimit, middleware.RequireAuth(deps.Secret, deps.DB), deps.Forum.DeleteReply)
+	api.POST("/forum/replies/:id/like", writeLimit, middleware.RequireAuth(deps.Secret, deps.DB), deps.Forum.LikeReply)
+	api.DELETE("/forum/replies/:id/like", middleware.RequireAuth(deps.Secret, deps.DB), deps.Forum.UnlikeReply)
 	api.GET("/users/:username", middleware.OptionalAuth(deps.Secret, deps.DB), deps.Community.Profile)
 	api.POST("/users/:id/follow", writeLimit, middleware.RequireAuth(deps.Secret, deps.DB), deps.Community.FollowUser)
 	api.DELETE("/users/:id/follow", middleware.RequireAuth(deps.Secret, deps.DB), deps.Community.UnfollowUser)

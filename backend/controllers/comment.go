@@ -33,11 +33,17 @@ func toCommentDTO(comment models.Comment, liked bool) CommentDTO {
 	return CommentDTO{ID: comment.ID, PostID: comment.PostID, ParentID: comment.ParentID, ReplyToUserID: comment.ReplyToUserID, Content: comment.Content, Pinned: comment.Pinned, LikesCount: comment.LikesCount, Liked: liked, CreatedAt: comment.CreatedAt, Author: toUserDTO(comment.Author)}
 }
 
-// ListComments 文章的公开评论列表，按时间正序返回
+// ListComments 文章的公开评论列表，按时间正序返回。
+// 带 page 参数时按顶层评论分页（回复随父评论一并带出），避免热门文章一次
+// 返回全部评论；不带参数时保持完整列表行为，供管理端等场景使用
 func (cc *CommunityController) ListComments(c *gin.Context) {
 	var post models.Post
 	if err := cc.DB.Where("slug = ? AND status = ? AND moderation_status = ?", c.Param("slug"), "published", "normal").First(&post).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "文章不存在"})
+		return
+	}
+	if c.Query("page") != "" {
+		cc.listCommentsPaged(c, post)
 		return
 	}
 	var comments []models.Comment
@@ -65,6 +71,62 @@ func (cc *CommunityController) ListComments(c *gin.Context) {
 		items = append(items, toCommentDTO(comment, likedSet[comment.ID]))
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": items})
+}
+
+// listCommentsPaged 按顶层评论分页：total 只计顶层评论（回复随父评论返回），
+// 前端据此判断「加载更多」；置顶评论排在第一页最前
+func (cc *CommunityController) listCommentsPaged(c *gin.Context, post models.Post) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if page < 1 {
+		page = 1
+	}
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	if pageSize > 50 {
+		pageSize = 50
+	}
+	var total int64
+	if err := cc.DB.Model(&models.Comment{}).Where("post_id = ? AND status = ? AND parent_id IS NULL", post.ID, "published").Count(&total).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取评论失败"})
+		return
+	}
+	var roots []models.Comment
+	if err := cc.DB.Where("post_id = ? AND status = ? AND parent_id IS NULL", post.ID, "published").Preload("Author").Order("pinned DESC, created_at ASC, id ASC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&roots).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取评论失败"})
+		return
+	}
+	rootIDs := make([]uint, 0, len(roots))
+	for _, root := range roots {
+		rootIDs = append(rootIDs, root.ID)
+	}
+	// 评论最多两层，顶层评论的全部回复即 parent_id 指向它们的记录
+	var replies []models.Comment
+	if len(rootIDs) > 0 {
+		if err := cc.DB.Where("parent_id IN ? AND status = ?", rootIDs, "published").Preload("Author").Order("created_at ASC, id ASC").Find(&replies).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取评论失败"})
+			return
+		}
+	}
+	comments := append(roots, replies...)
+	likedSet := map[uint]bool{}
+	if userID := currentUserID(c); userID > 0 && len(comments) > 0 {
+		commentIDs := make([]uint, 0, len(comments))
+		for _, comment := range comments {
+			commentIDs = append(commentIDs, comment.ID)
+		}
+		var likedIDs []uint
+		cc.DB.Model(&models.CommentLike{}).Where("user_id = ? AND comment_id IN ?", userID, commentIDs).Pluck("comment_id", &likedIDs)
+		for _, id := range likedIDs {
+			likedSet[id] = true
+		}
+	}
+	items := make([]CommentDTO, 0, len(comments))
+	for _, comment := range comments {
+		items = append(items, toCommentDTO(comment, likedSet[comment.ID]))
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"items": items, "total": total, "page": page, "pageSize": pageSize}})
 }
 
 func (cc *CommunityController) CreateComment(c *gin.Context) {

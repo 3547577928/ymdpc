@@ -1,5 +1,6 @@
 import { ArrowUpRight, Code2, MessagesSquare, PenLine, Users } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { usePageMeta } from '../utils/usePageMeta'
 
 // 构建信息由构建流程注入，见 vite.config.ts，用于确认线上运行的是哪一个版本
 const buildMeta = [
@@ -9,6 +10,7 @@ const buildMeta = [
 ]
 
 export function AboutPage() {
+  usePageMeta('关于')
   return (
     <section className="container about-page">
       <div className="about-header"><div><div className="eyebrow">About the community</div><h1>这里是<br /><em>Quiet Signal。</em></h1></div></div>

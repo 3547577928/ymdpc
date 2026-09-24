@@ -55,6 +55,33 @@ export type UserSummary = {
   createdAt?: string
 }
 
+export type ForumKind = 'discuss' | 'share' | 'help' | 'rant'
+
+export type ForumTopic = {
+  id: number
+  content: string
+  kind: ForumKind
+  images: string[]
+  likesCount: number
+  repliesCount: number
+  liked: boolean
+  createdAt: string
+  updatedAt: string
+  author: UserSummary
+}
+
+export type ForumReply = {
+  id: number
+  topicId: number
+  parentId: number | null
+  replyToUserId: number | null
+  content: string
+  likesCount: number
+  liked: boolean
+  createdAt: string
+  author: UserSummary
+}
+
 export type Comment = {
   id: number
   postId: number
@@ -82,7 +109,7 @@ export type AdminComment = {
 
 export type NotificationItem = {
   id: number
-  type: 'comment' | 'reply' | 'like' | 'follow' | 'post'
+  type: 'comment' | 'reply' | 'like' | 'follow' | 'post' | 'forum_reply' | 'forum_like'
   resourceId: number
   resourceSlug?: string
   resourceTitle?: string
@@ -95,7 +122,7 @@ export type NotificationItem = {
 
 export type AdminReport = {
   id: number
-  targetType: 'post' | 'comment'
+  targetType: 'post' | 'comment' | 'forum_topic' | 'forum_reply'
   targetId: number
   targetSummary: string
   targetTitle?: string

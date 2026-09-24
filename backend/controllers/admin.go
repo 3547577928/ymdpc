@@ -3,6 +3,7 @@ package controllers
 import (
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"quietsignal/backend/models"
@@ -256,25 +257,64 @@ type TopPostDTO struct {
 	Author        UserDTO `json:"author"`
 }
 
+// SiteStats 全站概览数据：规模、互动总量、今日新增与近 7 天活跃用户
+type SiteStats struct {
+	Total          int64            `json:"total"`
+	Users          int64            `json:"users"`
+	Posts          int64            `json:"posts"`
+	Published      int64            `json:"published"`
+	Views          int64            `json:"views"`
+	Likes          int64            `json:"likes"`
+	Comments       int64            `json:"comments"`
+	Followers      int64            `json:"follows"`
+	TodayUsers     int64            `json:"todayUsers"`
+	TodayPosts     int64            `json:"todayPosts"`
+	TodayComments  int64            `json:"todayComments"`
+	PendingReports int64            `json:"pendingReports"`
+	ActiveUsers    []ActiveUserDTO  `json:"activeUsers"`
+	DailyMetrics   []DailyMetricDTO `json:"dailyMetrics"`
+	TopPosts       []TopPostDTO     `json:"topPosts"`
+}
+
+// SiteStatsCache 统计结果进程内缓存：接口要串行执行十余条 COUNT/SUM，
+// 后台每次进入/翻页都全量重算不划算，60 秒内直接返回缓存
+type SiteStatsCache struct {
+	mu      sync.Mutex
+	data    *SiteStats
+	expires time.Time
+}
+
+const siteStatsTTL = 60 * time.Second
+
+func (cache *SiteStatsCache) Get() *SiteStats {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if cache.data != nil && time.Now().Before(cache.expires) {
+		return cache.data
+	}
+	return nil
+}
+
+func (cache *SiteStatsCache) Store(stats *SiteStats) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	cache.data = stats
+	cache.expires = time.Now().Add(siteStatsTTL)
+}
+
 // UserStats 全站概览：规模、互动总量、今日新增与近 7 天活跃用户
 func (cc *CommunityController) UserStats(c *gin.Context) {
-	var stats struct {
-		Total          int64            `json:"total"`
-		Users          int64            `json:"users"`
-		Posts          int64            `json:"posts"`
-		Published      int64            `json:"published"`
-		Views          int64            `json:"views"`
-		Likes          int64            `json:"likes"`
-		Comments       int64            `json:"comments"`
-		Followers      int64            `json:"follows"`
-		TodayUsers     int64            `json:"todayUsers"`
-		TodayPosts     int64            `json:"todayPosts"`
-		TodayComments  int64            `json:"todayComments"`
-		PendingReports int64            `json:"pendingReports"`
-		ActiveUsers    []ActiveUserDTO  `json:"activeUsers"`
-		DailyMetrics   []DailyMetricDTO `json:"dailyMetrics"`
-		TopPosts       []TopPostDTO     `json:"topPosts"`
+	if cached := cc.StatsCache.Get(); cached != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": cached})
+		return
 	}
+	var stats SiteStats
+	defer func() {
+		// 仅在成功响应时写入缓存
+		if c.Writer.Status() == http.StatusOK {
+			cc.StatsCache.Store(&stats)
+		}
+	}()
 	if err := cc.DB.Model(&models.User{}).Count(&stats.Users).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取统计失败"})
 		return

@@ -29,7 +29,7 @@ func sessionActive(db *gorm.DB, c *gin.Context) bool {
 	if err := db.Select("status", "session_version").First(&user, userIDFromContext(c)).Error; err != nil || user.Status == "banned" {
 		return false
 	}
-	tokenVersion, ok := c.Get("sessionVersion")
+	tokenVersion, _ := c.Get("sessionVersion")
 	version, ok := tokenVersion.(int)
 	return ok && version > 0 && version == user.SessionVersion
 }

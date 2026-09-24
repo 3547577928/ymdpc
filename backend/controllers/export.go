@@ -37,12 +37,12 @@ func (ic *InteractionController) AdminExport(c *gin.Context) {
 	}
 	if err != nil {
 		// 导出响应已经开始写出，无法再改成 JSON；记录为服务端错误并结束 CSV。
-		c.Error(err)
+		_ = c.Error(err)
 		return
 	}
 	writer.Flush()
 	if err := writer.Error(); err != nil {
-		c.Error(err)
+		_ = c.Error(err)
 	}
 }
 

@@ -1,0 +1,18 @@
+# golangci-lint 配置：默认 linters 之外按项目需要调整
+version: "2"
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  settings:
+    errcheck:
+      # gin 的 c.Error 与常见写回响应的返回值项目里有意忽略
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

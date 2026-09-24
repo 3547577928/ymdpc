@@ -1,7 +1,10 @@
 import { Plus } from 'lucide-react'
 import type { FormEvent } from 'react'
-import { useEffect, useState } from 'react'
-import { createCategory, createPost, deleteCategory, deleteComment, deletePost, deleteTag, downloadAdminExport, getAdminPost, getCurrentUser, handleAdminReport, handleAdminReports, login, logout, updateAdminCommentStatus, updateAdminCommentsStatus, updateAdminSettings, updateAdminUser, updatePost, updatePostModeration, updatePostStatus, type AuthUser, type PostInput } from '../services/api'
+import { useState } from 'react'
+import { Link } from 'react-router-dom'
+import { createCategory, createPost, deleteCategory, deleteComment, deletePost, deleteTag, downloadAdminExport, getAdminPost, handleAdminReport, handleAdminReports, login, logout, updateAdminCommentStatus, updateAdminCommentsStatus, updateAdminSettings, updateAdminUser, updatePost, updatePostModeration, updatePostStatus, type PostInput } from '../services/api'
+import { useAuth } from '../services/auth'
+import { usePageMeta } from '../utils/usePageMeta'
 import type { AdminComment, AdminReport, PostStatus, PostSummary, TagUsage } from '../types'
 import { ConfirmDialog } from '../components/Dialog'
 import { AdminContent } from './admin/AdminContent'
@@ -15,7 +18,9 @@ const pageSize = 20
 type ConfirmRequest = { title: string; message: string; action: () => Promise<void> }
 
 export function AdminPage() {
-  const [user, setUser] = useState<AuthUser>()
+  usePageMeta('管理后台')
+  // 登录态由 AuthProvider 全局共享
+  const { user, loading, setUser } = useAuth()
   const [active, setActive] = useState('文章')
   const [page, setPage] = useState(1)
   const [userPage, setUserPage] = useState(1)
@@ -27,18 +32,15 @@ export function AdminPage() {
   const [showEditor, setShowEditor] = useState(false)
   const [editingID, setEditingID] = useState<number>()
   const [draft, setDraft] = useState<PostInput>(emptyDraft)
-  const [loginForm, setLoginForm] = useState({ username: 'admin', password: '' })
-  const [loading, setLoading] = useState(true)
+  const [loginForm, setLoginForm] = useState({ username: '', password: '' })
   const [editorLoading, setEditorLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest>()
 
-  const data = useAdminData({ user, active, page, userPage, commentPage, commentPostFilter, reportPage, reportStatus, logPage, showEditor, setError })
-
-  useEffect(() => {
-    getCurrentUser().then(setUser).catch(() => undefined).finally(() => setLoading(false))
-  }, [])
+  // 非管理员不触发任何管理端请求：仅角色确认为 admin 时才把 user 传给数据层
+  const adminUser = user?.role === 'admin' ? user : undefined
+  const data = useAdminData({ user: adminUser, active, page, userPage, commentPage, commentPostFilter, reportPage, reportStatus, logPage, showEditor, setError })
 
   const handleLogin = async (event: FormEvent) => {
     event.preventDefault()
@@ -219,6 +221,10 @@ export function AdminPage() {
 
   if (loading) return <div className="container page-state"><span className="eyebrow">Admin</span><h1>正在验证登录状态。</h1></div>
   if (!user) return <AdminLogin username={loginForm.username} password={loginForm.password} error={error} onUsernameChange={(username) => setLoginForm({ ...loginForm, username })} onPasswordChange={(password) => setLoginForm({ ...loginForm, password })} onSubmit={handleLogin} />
+  // 普通登录用户直接访问 /admin 时，不能看到后台界面，只能看到无权限提示
+  if (!adminUser) {
+    return <div className="container page-state"><span className="eyebrow">Admin</span><h1>需要管理员权限。</h1><p>当前账号（{user.nickname}）没有后台访问权限。</p><p><Link className="text-button" to="/">返回首页</Link></p></div>
+  }
 
   return <section className="admin-page">
     <AdminSidebar active={active} onChange={setActive} onLogout={async () => { await logout().catch(() => undefined); setUser(undefined) }} />

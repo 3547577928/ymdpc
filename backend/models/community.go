@@ -29,7 +29,7 @@ type CommentLike struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
-// Notification 站内通知，Type 为 comment/reply/like/follow/post
+// Notification 站内通知，Type 包含文章互动与 forum_reply/forum_like。
 type Notification struct {
 	ID         uint       `json:"id" gorm:"primaryKey"`
 	UserID     uint       `json:"userId" gorm:"index;not null"`
@@ -41,7 +41,7 @@ type Notification struct {
 	CreatedAt  time.Time  `json:"createdAt"`
 }
 
-// Report 举报，TargetType 为 post 或 comment，Status 为 pending/handled/dismissed
+// Report 举报，TargetType 为 post/comment/forum_topic/forum_reply。
 type Report struct {
 	ID         uint       `json:"id" gorm:"primaryKey"`
 	ReporterID uint       `json:"reporterId" gorm:"index;not null"`

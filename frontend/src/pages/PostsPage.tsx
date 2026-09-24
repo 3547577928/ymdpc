@@ -3,11 +3,13 @@ import { Link } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { PostCard } from '../components/PostCard'
-import { getCategories, getFeed, getTags, getTrendingTags } from '../services/api'
-import type { Category, PostSummary } from '../types'
+import { SkeletonPostGrid } from '../components/Skeleton'
+import { useCategories, useFeed, useTags, useTrendingTags } from '../services/queries'
 import { formatDate } from '../utils'
+import { usePageMeta } from '../utils/usePageMeta'
 
 export function PostsPage() {
+  usePageMeta('文章')
   const pageSize = 12
   const currentYear = new Date().getFullYear()
   const [params, setParams] = useSearchParams()
@@ -15,15 +17,22 @@ export function PostsPage() {
   const page = Math.max(1, Number(params.get('page')) || 1)
   const mode = params.get('mode') ?? 'latest'
   const [queryInput, setQueryInput] = useState(query)
-  const [posts, setPosts] = useState<PostSummary[]>([])
-  const [rankingPosts, setRankingPosts] = useState<PostSummary[]>([])
-  const [allTags, setAllTags] = useState<string[]>([])
-  const [categories, setCategories] = useState<Category[]>([])
-  const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
   const selectedTag = params.get('tag') ?? '全部'
   const selectedCategory = params.get('category') ?? '全部'
+  // 标签/分类/榜单/主列表全部由 React Query 管理：参数变化自动取数并缓存，
+  // 不再各自维护 loading/error 样板，翻页保留上一页数据不闪烁
+  const tagsQuery = useTags()
+  const categoriesQuery = useCategories()
+  const trendingQuery = useTrendingTags(20)
+  const feedQuery = useFeed({ mode, q: query, tag: selectedTag === '全部' ? undefined : selectedTag, category: selectedCategory === '全部' ? undefined : selectedCategory, page, pageSize })
+  const rankingQuery = useFeed({ mode: 'hot', pageSize: 5 }, 60_000)
+  const posts = feedQuery.data?.items ?? []
+  const total = feedQuery.data?.total ?? 0
+  const loading = feedQuery.isLoading
+  const error = feedQuery.error?.message ?? ''
+  const categories = categoriesQuery.data ?? []
+  const allTags = trendingQuery.data?.length ? trendingQuery.data.map((tag) => tag.name) : (tagsQuery.data ?? []).map((tag) => tag.name)
+  const rankingPosts = rankingQuery.data?.items ?? []
 
   useEffect(() => {
     setQueryInput(query)
@@ -40,30 +49,6 @@ export function PostsPage() {
     }, 300)
     return () => window.clearTimeout(timer)
   }, [params, query, queryInput, setParams])
-
-  useEffect(() => {
-    Promise.all([getTags(), getCategories(), getTrendingTags({ limit: 20 })]).then(([tags, categoryItems, trending]) => {
-      setAllTags(trending.length ? trending.map((tag) => tag.name) : tags.map((tag) => tag.name))
-      setCategories(categoryItems)
-    }).catch((reason: Error) => setError(reason.message))
-    getFeed({ mode: 'hot', pageSize: 5 }).then((data) => setRankingPosts(data.items)).catch(() => setRankingPosts([]))
-  }, [])
-
-  useEffect(() => {
-    let active = true
-    setLoading(true)
-    setError('')
-    getFeed({ mode, q: query, tag: selectedTag === '全部' ? undefined : selectedTag, category: selectedCategory === '全部' ? undefined : selectedCategory, page, pageSize }).then((postPage) => {
-      if (!active) return
-      setPosts(postPage.items)
-      setTotal(postPage.total)
-    }).catch((reason: Error) => {
-      if (active) setError(reason.message)
-    }).finally(() => {
-      if (active) setLoading(false)
-    })
-    return () => { active = false }
-  }, [mode, page, query, selectedCategory, selectedTag])
 
   const changeTag = (tag: string) => {
     const next = new URLSearchParams(params)
@@ -90,7 +75,7 @@ export function PostsPage() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  const feedContent = loading ? <div className="empty-state"><h2>正在加载文章</h2><p>正在从社区读取公开内容。</p></div> : error ? <div className="empty-state"><h2>文章加载失败</h2><p>{error}</p></div> : posts.length ? <>
+  const feedContent = loading ? <SkeletonPostGrid count={6} /> : error ? <div className="empty-state"><h2>文章加载失败</h2><p>{error}</p></div> : posts.length ? <>
     {mode === 'following' ? <div className="following-feed">{posts.map((post) => <div className="following-update" key={post.id}>
       <Link className="following-author" to={`/users/${post.author.username}`}>
         <span className="following-avatar">{post.author.avatar ? <img src={post.author.avatar} alt="" /> : post.author.nickname.slice(0, 1)}</span>

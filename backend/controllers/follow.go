@@ -69,14 +69,16 @@ func (cc *CommunityController) UnfollowUser(c *gin.Context) {
 	}
 }
 
-// Profile 用户公开主页：基本资料、公开文章列表与关注数据
+// Profile 用户公开主页：基本资料、公开文章列表（分页）与关注数据。
+// 文章列表曾经硬编码 Limit 30，高产作者的主页会静默丢掉更早的文章
 func (cc *CommunityController) Profile(c *gin.Context) {
 	var user models.User
 	if err := cc.DB.Where("username = ? AND status = ?", c.Param("username"), "active").First(&user).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "用户不存在"})
 		return
 	}
-	profile, err := cc.profileData(user)
+	page, pageSize := pagination(c)
+	profile, err := cc.profileData(user, page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取用户资料失败"})
 		return
@@ -101,9 +103,9 @@ func (cc *CommunityController) followResponse(c *gin.Context, followerID, follow
 	return nil
 }
 
-func (cc *CommunityController) profileData(user models.User) (UserProfileDTO, error) {
+func (cc *CommunityController) profileData(user models.User, page, pageSize int) (UserProfileDTO, error) {
 	var posts []models.Post
-	if err := cc.DB.Where("author_id = ? AND status = ? AND moderation_status = ?", user.ID, "published", "normal").Preload("Tags").Preload("Author").Preload("Category").Order("published_at DESC, id DESC").Limit(30).Find(&posts).Error; err != nil {
+	if err := cc.DB.Where("author_id = ? AND status = ? AND moderation_status = ?", user.ID, "published", "normal").Preload("Tags").Preload("Author").Preload("Category").Order("published_at DESC, id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&posts).Error; err != nil {
 		return UserProfileDTO{}, err
 	}
 	var postCount, likeCount, followers, following int64
