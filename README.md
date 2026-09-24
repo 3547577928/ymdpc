@@ -1,6 +1,6 @@
 # Quiet Signal
 
-一个基于 React + Go + Gin + GORM + SQLite 的轻量论坛。用户可以注册、登录、发文章、评论、点赞、关注作者，并在个人主页查看自己的社区数据。SQLite 使用 `github.com/glebarez/sqlite`，底层为纯 Go 实现，不依赖 CGO。
+一个基于 React + Go + Gin + GORM + SQLite 的写作社区。用户可以注册、登录（密码或邮箱验证码）、写 Markdown 文章、评论、点赞、收藏、关注作者、订阅标签，也可以在论坛发短帖讨论；支持文章系列、全文搜索（FTS5 高亮）、RSS 订阅、实时通知（SSE）、暗色模式与作者数据看板。SQLite 使用 `github.com/glebarez/sqlite`，底层为纯 Go 实现，不依赖 CGO。
 
 ## 本地运行
 

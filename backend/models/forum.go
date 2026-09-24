@@ -15,6 +15,7 @@ type ForumTopic struct {
 	Images       []ForumTopicImage `json:"images" gorm:"foreignKey:TopicID;constraint:OnDelete:CASCADE"`
 	CreatedAt    time.Time         `json:"createdAt"`
 	UpdatedAt    time.Time         `json:"updatedAt"`
+	EditedAt     *time.Time        `json:"editedAt,omitempty"`
 }
 
 type ForumTopicImage struct {
@@ -37,6 +38,7 @@ type ForumReply struct {
 	LikesCount    int        `json:"likesCount"`
 	CreatedAt     time.Time  `json:"createdAt"`
 	UpdatedAt     time.Time  `json:"updatedAt"`
+	EditedAt      *time.Time `json:"editedAt,omitempty"`
 }
 
 type ForumTopicLike struct {

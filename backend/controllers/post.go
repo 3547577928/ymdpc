@@ -70,6 +70,7 @@ type PostSummaryDTO struct {
 	Status           string       `json:"status"`
 	ModerationStatus string       `json:"moderationStatus"`
 	Category         *CategoryDTO `json:"category,omitempty"`
+	SeriesID         *uint        `json:"seriesId,omitempty"`
 	Featured         bool         `json:"featured"`
 	Views            int          `json:"views"`
 	LikesCount       int          `json:"likesCount"`
@@ -98,6 +99,8 @@ type PostDetailDTO struct {
 	Post     PostDTO          `json:"post"`
 	Previous *AdjacentPostDTO `json:"previous"`
 	Next     *AdjacentPostDTO `json:"next"`
+	// Series 文章所属系列与全部目录；不属于系列时为空
+	Series *SeriesDetailDTO `json:"series,omitempty"`
 }
 
 type PostRequest struct {
@@ -110,6 +113,7 @@ type PostRequest struct {
 	Status      string     `json:"status"`
 	Featured    bool       `json:"featured"`
 	CategoryID  *uint      `json:"categoryId"`
+	SeriesID    *uint      `json:"seriesId"`
 	ScheduledAt *time.Time `json:"scheduledAt"`
 }
 
@@ -171,7 +175,17 @@ func (p *PostController) list(c *gin.Context, status string, includeDrafts bool)
 
 func (p *PostController) Detail(c *gin.Context) {
 	var post models.Post
-	if err := p.DB.Preload("Tags").Preload("Author").Preload("Category").Where("slug = ? AND status = ? AND moderation_status = ?", c.Param("slug"), "published", "normal").First(&post).Error; err != nil {
+	if err := p.DB.Preload("Tags").Preload("Author").Preload("Category").Preload("Series").Where("slug = ? AND status = ? AND moderation_status = ?", c.Param("slug"), "published", "normal").First(&post).Error; err != nil {
+		// 旧 slug 重定向：作者改 slug 后，已分享的链接按版本历史找到当前地址，
+		// 301 让搜索引擎与浏览器把权重导到新链接
+		var revision models.PostRevision
+		if revErr := p.DB.Where("slug = ?", c.Param("slug")).Order("created_at DESC").First(&revision).Error; revErr == nil {
+			var current models.Post
+			if postErr := p.DB.Select("slug").Where("id = ? AND status = ? AND moderation_status = ?", revision.PostID, "published", "normal").First(&current).Error; postErr == nil {
+				c.Redirect(http.StatusMovedPermanently, "/api/posts/"+current.Slug)
+				return
+			}
+		}
 		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "文章不存在"})
 		return
 	}
@@ -189,7 +203,18 @@ func (p *PostController) Detail(c *gin.Context) {
 	liked, favorited := interactionSets(p.DB, currentUserID(c), []uint{post.ID})
 	detail.Liked = liked[post.ID]
 	detail.Favorited = favorited[post.ID]
-	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": PostDetailDTO{Post: detail, Previous: previous, Next: next}})
+	var seriesDetail *SeriesDetailDTO
+	if post.Series != nil {
+		seriesDetail = &SeriesDetailDTO{SeriesBriefDTO: SeriesBriefDTO{ID: post.Series.ID, Title: post.Series.Title, Slug: post.Series.Slug}, Description: post.Series.Description, Author: toUserDTO(post.Author)}
+		var seriesPosts []models.Post
+		if err := p.DB.Select("id", "title", "slug").Where("series_id = ? AND status = ? AND moderation_status = ?", post.Series.ID, "published", "normal").Order("published_at ASC, id ASC").Find(&seriesPosts).Error; err == nil {
+			seriesDetail.Posts = make([]AdjacentPostDTO, 0, len(seriesPosts))
+			for _, item := range seriesPosts {
+				seriesDetail.Posts = append(seriesDetail.Posts, AdjacentPostDTO{Title: item.Title, Slug: item.Slug})
+			}
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": PostDetailDTO{Post: detail, Previous: previous, Next: next, Series: seriesDetail}})
 }
 
 func (p *PostController) RecordView(c *gin.Context) {
@@ -503,7 +528,7 @@ func toPostSummaryDTO(post models.Post) PostSummaryDTO {
 	for _, tag := range post.Tags {
 		tags = append(tags, tag.Name)
 	}
-	return PostSummaryDTO{ID: post.ID, Author: toUserDTO(post.Author), Title: post.Title, Slug: post.Slug, Summary: post.Summary, CoverImage: post.CoverImage, Tags: tags, Status: post.Status, ModerationStatus: post.ModerationStatus, Category: toCategoryDTO(post.Category), Featured: post.Featured, Views: post.Views, LikesCount: post.LikesCount, FavoriteCount: post.FavoriteCount, CommentsCount: post.CommentsCount, ReadingTime: post.ReadingTime, PublishedAt: post.PublishedAt, ScheduledAt: post.ScheduledAt, CreatedAt: post.CreatedAt, UpdatedAt: post.UpdatedAt}
+	return PostSummaryDTO{ID: post.ID, Author: toUserDTO(post.Author), Title: post.Title, Slug: post.Slug, Summary: post.Summary, CoverImage: post.CoverImage, Tags: tags, Status: post.Status, ModerationStatus: post.ModerationStatus, Category: toCategoryDTO(post.Category), SeriesID: post.SeriesID, Featured: post.Featured, Views: post.Views, LikesCount: post.LikesCount, FavoriteCount: post.FavoriteCount, CommentsCount: post.CommentsCount, ReadingTime: post.ReadingTime, PublishedAt: post.PublishedAt, ScheduledAt: post.ScheduledAt, CreatedAt: post.CreatedAt, UpdatedAt: post.UpdatedAt}
 }
 
 func toCategoryDTO(category *models.Category) *CategoryDTO {

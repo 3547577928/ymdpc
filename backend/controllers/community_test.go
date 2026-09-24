@@ -23,7 +23,7 @@ func newCommunityTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.EmailLoginCode{}, &models.Post{}, &models.Tag{}, &models.Comment{}, &models.PostLike{}, &models.Follow{}, &models.Category{}, &models.Favorite{}, &models.CommentLike{}, &models.Notification{}, &models.Report{}, &models.AdminLog{}, &models.Setting{}, &models.PostRevision{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.EmailLoginCode{}, &models.Post{}, &models.Tag{}, &models.Comment{}, &models.PostLike{}, &models.Follow{}, &models.Category{}, &models.Favorite{}, &models.CommentLike{}, &models.Notification{}, &models.Report{}, &models.AdminLog{}, &models.Setting{}, &models.PostRevision{}, &models.TagSubscription{}, &models.Series{}, &models.ForumTopic{}, &models.ForumTopicImage{}, &models.ForumReply{}, &models.ForumTopicLike{}, &models.ForumReplyLike{}); err != nil {
 		t.Fatal(err)
 	}
 	return db

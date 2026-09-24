@@ -7,6 +7,11 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
+    // public 下的原生脚本运行在浏览器环境
+    files: ['public/**/*.js'],
+    languageOptions: { globals: { document: 'readonly', localStorage: 'readonly', matchMedia: 'readonly', window: 'readonly' } },
+  },
+  {
     files: ['src/**/*.{ts,tsx}'],
     plugins: { 'react-hooks': reactHooks },
     rules: {

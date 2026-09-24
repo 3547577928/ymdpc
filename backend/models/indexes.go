@@ -9,6 +9,8 @@ func EnsureIndexes(db *gorm.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_posts_public_order ON posts(status, moderation_status, published_at, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_posts_scheduled_publish ON posts(status, scheduled_at, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_comments_post_status_created ON comments(post_id, status, created_at, id)`,
+		// 评论分页按 顶层+随层回复 查询（parent_id IS NULL / parent_id IN），复合索引覆盖过滤与排序
+		`CREATE INDEX IF NOT EXISTS idx_comments_post_status_parent_created ON comments(post_id, status, parent_id, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_notifications_user_read_created ON notifications(user_id, read_at, created_at, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_follows_following_follower ON follows(following_id, follower_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_post_likes_post_user ON post_likes(post_id, user_id)`,
@@ -18,6 +20,7 @@ func EnsureIndexes(db *gorm.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_forum_topics_public_order ON forum_topics(status, created_at, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_forum_topics_kind_order ON forum_topics(kind, status, created_at, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_forum_replies_topic_status_created ON forum_replies(topic_id, status, created_at, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_forum_replies_topic_status_parent_created ON forum_replies(topic_id, status, parent_id, created_at)`,
 	}
 	for _, statement := range statements {
 		if err := db.Exec(statement).Error; err != nil {

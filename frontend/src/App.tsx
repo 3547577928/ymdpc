@@ -21,6 +21,10 @@ const PostPage = lazy(() => import('./pages/PostPage').then((m) => ({ default: m
 const PostsPage = lazy(() => import('./pages/PostsPage').then((m) => ({ default: m.PostsPage })))
 const ProfilePage = lazy(() => import('./pages/ProfilePage').then((m) => ({ default: m.ProfilePage })))
 const ProfileSettingsPage = lazy(() => import('./pages/ProfileSettingsPage').then((m) => ({ default: m.ProfileSettingsPage })))
+const SearchPage = lazy(() => import('./pages/SearchPage').then((m) => ({ default: m.SearchPage })))
+const TagPage = lazy(() => import('./pages/TagPage').then((m) => ({ default: m.TagPage })))
+const MyStatsPage = lazy(() => import('./pages/MyStatsPage').then((m) => ({ default: m.MyStatsPage })))
+const SeriesPage = lazy(() => import('./pages/SeriesPage').then((m) => ({ default: m.SeriesPage })))
 const WritePage = lazy(() => import('./pages/WritePage').then((m) => ({ default: m.WritePage })))
 
 // 社区内容页统一挂在 Shell 布局（页头导航 + 页脚）下；
@@ -36,9 +40,13 @@ const shellPages = [
   { path: '/about', element: <AboutPage /> },
   { path: '/me/posts', element: <MyPostsPage /> },
   { path: '/me/favorites', element: <FavoritesPage /> },
+  { path: '/me/stats', element: <MyStatsPage /> },
   { path: '/notifications', element: <NotificationsPage /> },
   { path: '/users/:username', element: <ProfilePage /> },
   { path: '/settings/profile', element: <ProfileSettingsPage /> },
+  { path: '/search', element: <SearchPage /> },
+  { path: '/tags/:slug', element: <TagPage /> },
+  { path: '/series/:slug', element: <SeriesPage /> },
 ]
 
 const pageFallback = <div className="container page-state"><span className="eyebrow">Loading</span><h1>正在加载。</h1></div>

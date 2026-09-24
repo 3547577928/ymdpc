@@ -49,7 +49,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("connect database: %v", err)
 	}
-	if err := migrateDB.AutoMigrate(&models.User{}, &models.EmailLoginCode{}, &models.Post{}, &models.Tag{}, &models.Comment{}, &models.PostLike{}, &models.Follow{}, &models.Category{}, &models.Favorite{}, &models.CommentLike{}, &models.Notification{}, &models.Report{}, &models.AdminLog{}, &models.Setting{}, &models.PostRevision{}, &models.ForumTopic{}, &models.ForumTopicImage{}, &models.ForumReply{}, &models.ForumTopicLike{}, &models.ForumReplyLike{}); err != nil {
+	if err := migrateDB.AutoMigrate(&models.User{}, &models.EmailLoginCode{}, &models.Post{}, &models.Tag{}, &models.Comment{}, &models.PostLike{}, &models.Follow{}, &models.Category{}, &models.Favorite{}, &models.CommentLike{}, &models.Notification{}, &models.Report{}, &models.AdminLog{}, &models.Setting{}, &models.PostRevision{}, &models.ForumTopic{}, &models.ForumTopicImage{}, &models.ForumReply{}, &models.ForumTopicLike{}, &models.ForumReplyLike{}, &models.TagSubscription{}, &models.Series{}); err != nil {
 		log.Fatalf("migrate database: %v", err)
 	}
 	if err := models.EnsureIndexes(migrateDB); err != nil {
@@ -84,7 +84,7 @@ func main() {
 	r := gin.New()
 	r.Static("/uploads", cfg.UploadDir)
 	r.Use(gin.Logger(), gin.Recovery(), cors.New(corsConfig(cfg.AllowedOrigins, gin.Mode() != gin.ReleaseMode)))
-	routes.Register(r, routes.Dependencies{Posts: &controllers.PostController{DB: db, UploadDir: cfg.UploadDir, Views: viewCounter}, Community: &controllers.CommunityController{DB: db, UploadDir: cfg.UploadDir}, Forum: &controllers.ForumController{DB: db}, Interactions: &controllers.InteractionController{DB: db}, Tags: &controllers.TagController{DB: db}, Auth: &controllers.AuthController{DB: db, Secret: cfg.JWTSecret, CookieSecure: cfg.CookieSecure, SMTPHost: cfg.SMTPHost, SMTPPort: cfg.SMTPPort, SMTPUsername: cfg.SMTPUsername, SMTPPassword: cfg.SMTPPassword, SMTPFrom: cfg.SMTPFrom, EmailCodeTTL: cfg.EmailCodeTTL}, Uploads: &controllers.UploadController{Dir: cfg.UploadDir, DB: db}, Secret: cfg.JWTSecret, DB: db})
+	routes.Register(r, routes.Dependencies{Posts: &controllers.PostController{DB: db, UploadDir: cfg.UploadDir, Views: viewCounter}, Community: &controllers.CommunityController{DB: db, UploadDir: cfg.UploadDir}, Forum: &controllers.ForumController{DB: db}, Interactions: &controllers.InteractionController{DB: db}, Tags: &controllers.TagController{DB: db}, Series: &controllers.SeriesController{DB: db}, Auth: &controllers.AuthController{DB: db, Secret: cfg.JWTSecret, CookieSecure: cfg.CookieSecure, SMTPHost: cfg.SMTPHost, SMTPPort: cfg.SMTPPort, SMTPUsername: cfg.SMTPUsername, SMTPPassword: cfg.SMTPPassword, SMTPFrom: cfg.SMTPFrom, EmailCodeTTL: cfg.EmailCodeTTL}, Uploads: &controllers.UploadController{Dir: cfg.UploadDir, DB: db}, Secret: cfg.JWTSecret, DB: db})
 
 	log.Printf("quiet signal api listening on :%s", cfg.Port)
 	server := &http.Server{

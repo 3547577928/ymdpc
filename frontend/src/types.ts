@@ -13,6 +13,7 @@ export type PostSummary = {
   status: PostStatus
   moderationStatus?: string
   category?: Category | null
+  seriesId?: number | null
   featured: boolean
   views: number
   likesCount: number
@@ -67,6 +68,7 @@ export type ForumTopic = {
   liked: boolean
   createdAt: string
   updatedAt: string
+  editedAt?: string | null
   author: UserSummary
 }
 
@@ -79,6 +81,7 @@ export type ForumReply = {
   likesCount: number
   liked: boolean
   createdAt: string
+  editedAt?: string | null
   author: UserSummary
 }
 
@@ -92,6 +95,7 @@ export type Comment = {
   likesCount: number
   liked: boolean
   createdAt: string
+  editedAt?: string | null
   author: UserSummary
 }
 

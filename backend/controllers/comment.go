@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -24,13 +25,14 @@ type CommentDTO struct {
 	Content       string    `json:"content"`
 	Pinned        bool      `json:"pinned"`
 	LikesCount    int       `json:"likesCount"`
-	Liked         bool      `json:"liked"`
+	Liked         bool       `json:"liked"`
 	CreatedAt     time.Time `json:"createdAt"`
+	EditedAt      *time.Time `json:"editedAt,omitempty"`
 	Author        UserDTO   `json:"author"`
 }
 
 func toCommentDTO(comment models.Comment, liked bool) CommentDTO {
-	return CommentDTO{ID: comment.ID, PostID: comment.PostID, ParentID: comment.ParentID, ReplyToUserID: comment.ReplyToUserID, Content: comment.Content, Pinned: comment.Pinned, LikesCount: comment.LikesCount, Liked: liked, CreatedAt: comment.CreatedAt, Author: toUserDTO(comment.Author)}
+	return CommentDTO{ID: comment.ID, PostID: comment.PostID, ParentID: comment.ParentID, ReplyToUserID: comment.ReplyToUserID, Content: comment.Content, Pinned: comment.Pinned, LikesCount: comment.LikesCount, Liked: liked, CreatedAt: comment.CreatedAt, EditedAt: comment.EditedAt, Author: toUserDTO(comment.Author)}
 }
 
 // ListComments 文章的公开评论列表，按时间正序返回。
@@ -193,6 +195,10 @@ func (cc *CommunityController) CreateComment(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取新评论失败"})
 		return
 	}
+	// 广播给正在阅读本文的读者，评论区实时出现新评论（事务已提交）
+	if payload, err := json.Marshal(toCommentDTO(comment, false)); err == nil {
+		eventBus.Publish("comments:"+c.Param("slug"), "comment", string(payload))
+	}
 	c.JSON(http.StatusCreated, gin.H{"code": 0, "message": "success", "data": toCommentDTO(comment, false)})
 }
 
@@ -210,8 +216,10 @@ func (cc *CommunityController) DeleteComment(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "只能删除自己的评论"})
 		return
 	}
+	var deleteIDs []uint
 	if err := cc.DB.Transaction(func(tx *gorm.DB) error {
-		deleteIDs, err := commentDescendantIDs(tx, comment.ID)
+		var err error
+		deleteIDs, err = commentDescendantIDs(tx, comment.ID)
 		if err != nil {
 			return err
 		}
@@ -237,7 +245,60 @@ func (cc *CommunityController) DeleteComment(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "删除评论失败"})
 		return
 	}
+	// 广播删除事件，读者端实时移除（按 post_id 找 slug 作为主题）
+	var post models.Post
+	if err := cc.DB.Select("slug").First(&post, comment.PostID).Error; err == nil {
+		if payload, err := json.Marshal(gin.H{"ids": deleteIDs}); err == nil {
+			eventBus.Publish("comments:"+post.Slug, "comment_deleted", string(payload))
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
+}
+
+// UpdateComment 编辑评论内容：仅作者本人或管理员；EditedAt 记录编辑时间
+func (cc *CommunityController) UpdateComment(c *gin.Context) {
+	userID := currentUserID(c)
+	var comment models.Comment
+	if err := cc.DB.First(&comment, c.Param("id")).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "评论不存在"})
+		return
+	}
+	if comment.AuthorID != userID && !currentUserIsAdmin(c) {
+		c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "只能编辑自己的评论"})
+		return
+	}
+	if comment.Status != "published" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "该评论当前不可编辑"})
+		return
+	}
+	var input struct {
+		Content string `json:"content" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil || strings.TrimSpace(input.Content) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "评论内容不能为空"})
+		return
+	}
+	input.Content = strings.TrimSpace(input.Content)
+	if len([]rune(input.Content)) > 2000 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "评论不能超过 2000 字"})
+		return
+	}
+	now := time.Now()
+	if err := cc.DB.Model(&comment).Updates(map[string]any{"content": input.Content, "edited_at": &now}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "编辑评论失败"})
+		return
+	}
+	if err := cc.DB.Preload("Author").First(&comment, comment.ID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取评论失败"})
+		return
+	}
+	// 广播编辑事件，读者端实时更新内容
+	if postSlug := c.Query("postSlug"); postSlug != "" {
+		if payload, err := json.Marshal(toCommentDTO(comment, false)); err == nil {
+			eventBus.Publish("comments:"+postSlug, "comment_edited", string(payload))
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": toCommentDTO(comment, false)})
 }
 
 type AdminCommentDTO struct {

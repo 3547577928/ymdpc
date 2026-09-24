@@ -37,7 +37,8 @@ export function MyPostsPage() {
   const posts = postsQuery.data?.items ?? []
   const total = postsQuery.data?.total ?? 0
   const loading = postsQuery.isLoading
-  if (postsQuery.error) setError(postsQuery.error.message)
+  // 查询错误直接派生展示，渲染期不再 setState
+  const queryError = postsQuery.error?.message ?? ''
 
   const handleDelete = (post: PostSummary) => {
     setDeleteRequest(post)
@@ -66,7 +67,7 @@ export function MyPostsPage() {
     <div className="feed-tabs archive-toolbar-tabs">
       {tabs.map((tab) => <button key={tab.key} className={status === tab.key ? 'is-active' : ''} onClick={() => { setStatus(tab.key); setPage(1) }}>{tab.label}</button>)}
     </div>
-    {error && <div className="form-error">{error}</div>}
+    {(error || queryError) && <div className="form-error">{error || queryError}</div>}
     {loading ? <SkeletonList count={6} /> : posts.length ? <div className="admin-table">
       <div className="table-head"><span>标题</span><span>状态</span><span>更新时间</span><span>操作</span></div>
       {posts.map((post) => <div className="table-row" key={post.id}>

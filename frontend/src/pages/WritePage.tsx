@@ -1,4 +1,4 @@
-import { ArrowLeft, CalendarClock, Eye, FileClock, History, PenLine, RotateCcw, Save, Send } from 'lucide-react'
+import { ArrowLeft, CalendarClock, Eye, FileClock, History, PenLine, Plus, RotateCcw, Save, Send } from 'lucide-react'
 import type { FormEvent } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
@@ -8,13 +8,13 @@ import { MarkdownImportButton } from '../components/MarkdownImportButton'
 import { CategoryField } from '../components/CategoryField'
 import { MarkdownImageUploadButton } from '../components/MarkdownImageUploadButton'
 import { ConfirmDialog } from '../components/Dialog'
-import { createUserPost, getCategories, getPostById, getPostRevisions, restorePostRevision, updateUserPost, type PostInput } from '../services/api'
+import { createSeries, createUserPost, getAuthorSeries, getCategories, getPostById, getPostRevisions, restorePostRevision, updateUserPost, type PostInput, type SeriesListItem } from '../services/api'
 import { useAuth } from '../services/auth'
 import { usePageMeta } from '../utils/usePageMeta'
 import type { Category, Post, PostRevision } from '../types'
 import { clearPostDraft, hasDraftContent, loadPostDraft, savePostDraft, type StoredPostDraft } from '../utils/draftStorage'
 
-const initialDraft: PostInput = { title: '', slug: '', summary: '', content: '', coverImage: '', tags: [], status: 'draft', featured: false, scheduledAt: null }
+const initialDraft: PostInput = { title: '', slug: '', summary: '', content: '', coverImage: '', tags: [], status: 'draft', featured: false, seriesId: null, scheduledAt: null }
 
 function dateTimeLocalValue(value?: string | null) {
   if (!value) return ''
@@ -31,6 +31,9 @@ export function WritePage() {
   usePageMeta(id ? '编辑文章' : '写文章')
   const [draft, setDraft] = useState<PostInput>(initialDraft)
   const [categories, setCategories] = useState<Category[]>([])
+  const [seriesList, setSeriesList] = useState<SeriesListItem[]>([])
+  const [newSeriesTitle, setNewSeriesTitle] = useState('')
+  const [seriesBusy, setSeriesBusy] = useState(false)
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(Boolean(editingID))
   const [error, setError] = useState('')
@@ -55,6 +58,10 @@ export function WritePage() {
     if (!user) navigate(`/login?from=${encodeURIComponent(window.location.pathname)}`)
     else setChecking(false)
   }, [user, authLoading, navigate])
+  // 作者的系列列表（选择或新建后挂载文章）
+  useEffect(() => {
+    if (user) getAuthorSeries(user.username).then(setSeriesList).catch(() => undefined)
+  }, [user])
 
   useEffect(() => {
     let active = true
@@ -68,7 +75,7 @@ export function WritePage() {
     getPostById(editingID)
       .then((post) => {
         if (!active) return
-        const serverDraft: PostInput = { title: post.title, slug: post.slug, summary: post.summary, content: post.content, coverImage: post.coverImage, tags: post.tags, status: post.status, featured: post.featured, categoryId: post.category?.id ?? null, scheduledAt: post.scheduledAt ?? null }
+        const serverDraft: PostInput = { title: post.title, slug: post.slug, summary: post.summary, content: post.content, coverImage: post.coverImage, tags: post.tags, status: post.status, featured: post.featured, categoryId: post.category?.id ?? null, seriesId: post.seriesId ?? null, scheduledAt: post.scheduledAt ?? null }
         setDraft(serverDraft)
         const serverUpdatedAt = post.updatedAt ? new Date(post.updatedAt).getTime() : 0
         if (local && local.savedAt > serverUpdatedAt && hasDraftContent(local.draft)) setRecovery(local)
@@ -131,7 +138,7 @@ export function WritePage() {
   }
 
   const applyPost = (post: Post) => {
-    setDraft({ title: post.title, slug: post.slug, summary: post.summary, content: post.content, coverImage: post.coverImage, tags: post.tags, status: post.status, featured: post.featured, categoryId: post.category?.id ?? null, scheduledAt: post.scheduledAt ?? null })
+    setDraft({ title: post.title, slug: post.slug, summary: post.summary, content: post.content, coverImage: post.coverImage, tags: post.tags, status: post.status, featured: post.featured, categoryId: post.category?.id ?? null, seriesId: post.seriesId ?? null, scheduledAt: post.scheduledAt ?? null })
   }
 
   const importMarkdown = (document: { content: string; title: string; summary: string }) => {
@@ -196,6 +203,25 @@ export function WritePage() {
         <label>链接标识<input value={draft.slug} onChange={(event) => setDraft({ ...draft, slug: event.target.value })} placeholder="留空自动生成" /></label>
         <label>标签<input value={draft.tags.join(', ')} onChange={(event) => setDraft({ ...draft, tags: event.target.value.split(',').map((tag) => tag.trim()).filter(Boolean) })} placeholder="设计, 工程" /></label>
         <div className="write-field"><span>分类</span><CategoryField categories={categories} value={draft.categoryId} onChange={(categoryId) => setDraft({ ...draft, categoryId })} onError={setError} /></div>
+        <div className="write-field"><span>系列</span>
+          <select value={draft.seriesId ?? ''} onChange={(event) => setDraft({ ...draft, seriesId: event.target.value ? Number(event.target.value) : null })}>
+            <option value="">不属于系列</option>
+            {seriesList.map((series) => <option key={series.id} value={series.id}>{series.title}</option>)}
+          </select>
+          <div className="category-create-row">
+            <input value={newSeriesTitle} onChange={(event) => setNewSeriesTitle(event.target.value)} placeholder="新建系列" />
+            <button type="button" className="icon-button" disabled={seriesBusy || !newSeriesTitle.trim()} aria-label="创建系列" onClick={async () => {
+              setSeriesBusy(true)
+              setError('')
+              try {
+                const created = await createSeries({ title: newSeriesTitle.trim(), description: '' })
+                setSeriesList((current) => [created, ...current])
+                setDraft((current) => ({ ...current, seriesId: created.id }))
+                setNewSeriesTitle('')
+              } catch (reason) { setError(reason instanceof Error ? reason.message : '创建系列失败') } finally { setSeriesBusy(false) }
+            }}><Plus size={16} /></button>
+          </div>
+        </div>
         <label>计划发布时间<input type="datetime-local" min={dateTimeLocalValue(new Date().toISOString())} value={dateTimeLocalValue(draft.scheduledAt)} onChange={(event) => setDraft({ ...draft, scheduledAt: event.target.value ? new Date(event.target.value).toISOString() : null })} /></label>
         <label>封面图片<ImageUploadField value={draft.coverImage} onChange={(coverImage) => setDraft({ ...draft, coverImage })} /></label>
         {editingID && <div className="revision-panel"><div className="revision-heading"><span><History size={14} /> 版本历史</span><small>最近 {revisions.length} 个版本</small></div>{revisions.length ? <div className="revision-list">{revisions.map((revision) => <button type="button" key={revision.id} onClick={() => setRevisionToRestore(revision)}><strong>{revision.title}</strong><small>{new Date(revision.createdAt).toLocaleString()}</small></button>)}</div> : <p>保存修改后会在这里生成历史版本。</p>}</div>}

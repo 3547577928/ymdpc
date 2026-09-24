@@ -1,7 +1,7 @@
 import { ArrowRight, KeyRound, LockKeyhole, Mail, UserRound } from 'lucide-react'
 import { FormEvent, useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { login, register, requestEmailCode, verifyEmailCode } from '../services/api'
+import { login, register, requestEmailCode, resetPassword, verifyEmailCode } from '../services/api'
 import { useAuth } from '../services/auth'
 import { usePageMeta } from '../utils/usePageMeta'
 
@@ -15,7 +15,8 @@ export function AuthPage() {
   const [emailCode, setEmailCode] = useState('')
   const [codeSent, setCodeSent] = useState(false)
   const [cooldown, setCooldown] = useState(0)
-  const [mode, setMode] = useState<'password' | 'email'>('password')
+  const [mode, setMode] = useState<'password' | 'email' | 'reset'>('password')
+  const [newPassword, setNewPassword] = useState('')
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [saving, setSaving] = useState(false)
@@ -40,11 +41,15 @@ export function AuthPage() {
       if (isRegister) {
         setUser(await register(form.username, form.password, form.nickname))
         navigate(safeFrom, { replace: true })
-      } else if (mode === 'email' && !codeSent) {
+      } else if ((mode === 'email' || mode === 'reset') && !codeSent) {
         await requestEmailCode(email)
         setCodeSent(true)
         setCooldown(60)
         setMessage('验证码已发送，请在下方输入邮件中的 6 位数字。')
+      } else if (mode === 'reset') {
+        // 验证码确认邮箱归属后重置密码，后端直接签发会话
+        setUser(await resetPassword(email, emailCode, newPassword))
+        navigate(safeFrom, { replace: true })
       } else if (mode === 'email') {
         setUser(await verifyEmailCode(email, emailCode))
         navigate(safeFrom, { replace: true })
@@ -66,19 +71,22 @@ export function AuthPage() {
       <h1>{isRegister ? '加入讨论。' : '回到这里。'}</h1>
       <p>{isRegister ? '注册一个账号，写下你的判断，也参与别人的讨论。' : '登录后可以发文章、评论、点赞和关注作者。'}</p>
       {!isRegister && <div className="auth-mode-switch" role="tablist" aria-label="登录方式"><button type="button" className={mode === 'password' ? 'active' : ''} onClick={() => { setMode('password'); setError(''); setMessage('') }}>密码登录</button><button type="button" className={mode === 'email' ? 'active' : ''} onClick={() => { setMode('email'); setError(''); setMessage('') }}>邮箱登录</button></div>}
+      {!isRegister && mode === 'password' && <div className="auth-code-actions"><span /><button type="button" onClick={() => { setMode('reset'); setCodeSent(false); setEmailCode(''); setError(''); setMessage('') }}>忘记密码？</button></div>}
       {(isRegister || mode === 'password') && <>
         <label><span>用户名</span><div className="input-with-icon"><UserRound size={16} /><input required minLength={3} value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} autoComplete="username" /></div></label>
         {isRegister && <label><span>昵称</span><input required value={form.nickname} onChange={(event) => setForm({ ...form, nickname: event.target.value })} /></label>}
         <label><span>密码</span><div className="input-with-icon"><LockKeyhole size={16} /><input required minLength={8} type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} autoComplete={isRegister ? 'new-password' : 'current-password'} /></div></label>
       </>}
-      {!isRegister && mode === 'email' && <>
+      {!isRegister && (mode === 'email' || mode === 'reset') && <>
         <label><span>邮箱</span><div className="input-with-icon"><Mail size={16} /><input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" placeholder="name@example.com" readOnly={codeSent} /></div></label>
         {codeSent && <label><span>验证码</span><div className="input-with-icon"><KeyRound size={16} /><input required inputMode="numeric" pattern="[0-9]{6}" minLength={6} maxLength={6} value={emailCode} onChange={(event) => setEmailCode(event.target.value.replace(/\D/g, '').slice(0, 6))} autoComplete="one-time-code" placeholder="6 位数字" autoFocus /></div></label>}
+        {mode === 'reset' && codeSent && <label><span>新密码</span><div className="input-with-icon"><LockKeyhole size={16} /><input required minLength={8} type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} autoComplete="new-password" placeholder="至少 8 个字符" /></div></label>}
       </>}
       {error && <div className="form-error">{error}</div>}
       {message && <div className="form-success">{message}</div>}
-      <button className="button button-dark" type="submit" disabled={saving || (!isRegister && mode === 'email' && !codeSent && cooldown > 0)}>{saving ? '处理中' : isRegister ? '创建账号' : mode === 'email' ? codeSent ? '验证并登录' : cooldown > 0 ? `重新发送（${cooldown}s）` : '发送验证码' : '登录'} <ArrowRight size={16} /></button>
-      {!isRegister && mode === 'email' && codeSent && <div className="auth-code-actions"><button type="button" onClick={() => { setCodeSent(false); setEmailCode(''); setMessage(''); setError('') }}>修改邮箱</button><button type="button" disabled={saving || cooldown > 0} onClick={async () => { setSaving(true); setError(''); try { await requestEmailCode(email); setEmailCode(''); setCooldown(60); setMessage('新的验证码已发送。') } catch (reason) { setError(reason instanceof Error ? reason.message : '发送失败') } finally { setSaving(false) } }}>{cooldown > 0 ? `重新发送（${cooldown}s）` : '重新发送'}</button></div>}
+      <button className="button button-dark" type="submit" disabled={saving || (!isRegister && mode !== 'password' && !codeSent && cooldown > 0)}>{saving ? '处理中' : isRegister ? '创建账号' : mode === 'reset' ? codeSent ? '重置并登录' : cooldown > 0 ? `重新发送（${cooldown}s）` : '发送验证码' : mode === 'email' ? codeSent ? '验证并登录' : cooldown > 0 ? `重新发送（${cooldown}s）` : '发送验证码' : '登录'} <ArrowRight size={16} /></button>
+      {!isRegister && (mode === 'email' || mode === 'reset') && codeSent && <div className="auth-code-actions"><button type="button" onClick={() => { setCodeSent(false); setEmailCode(''); setMessage(''); setError('') }}>修改邮箱</button><button type="button" disabled={saving || cooldown > 0} onClick={async () => { setSaving(true); setError(''); try { await requestEmailCode(email); setEmailCode(''); setCooldown(60); setMessage('新的验证码已发送。') } catch (reason) { setError(reason instanceof Error ? reason.message : '发送失败') } finally { setSaving(false) } }}>{cooldown > 0 ? `重新发送（${cooldown}s）` : '重新发送'}</button></div>}
+      {!isRegister && mode === 'reset' && <div className="auth-code-actions"><button type="button" onClick={() => { setMode('password'); setCodeSent(false); setError(''); setMessage('') }}>返回密码登录</button></div>}
       <div className="auth-switch">{isRegister ? '已经有账号？' : '还没有账号？'} <Link to={isRegister ? '/login' : '/register'}>{isRegister ? '直接登录' : '注册账号'}</Link></div>
     </form>
   </section>

@@ -155,27 +155,8 @@ func (a *AuthController) VerifyEmailCode(c *gin.Context) {
 		return
 	}
 
-	var record models.EmailLoginCode
-	if err := a.DB.Where("email = ? AND used_at IS NULL", email).Order("created_at DESC").First(&record).Error; err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "验证码无效或已使用"})
-		return
-	}
-	if time.Now().After(record.ExpiresAt) {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "验证码已过期，请重新获取"})
-		return
-	}
-	if record.Attempts >= 5 {
-		c.JSON(http.StatusTooManyRequests, gin.H{"code": 429, "message": "验证码错误次数过多，请重新获取"})
-		return
-	}
-	if !hmac.Equal([]byte(record.CodeHash), []byte(hashEmailCode(a.Secret, email, code))) {
-		updates := map[string]any{"attempts": gorm.Expr("attempts + 1")}
-		if record.Attempts+1 >= 5 {
-			now := time.Now()
-			updates["used_at"] = &now
-		}
-		_ = a.DB.Model(&models.EmailLoginCode{}).Where("id = ? AND used_at IS NULL", record.ID).Updates(updates).Error
-		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "验证码错误"})
+	record, ok := a.checkEmailCode(c, email, code)
+	if !ok {
 		return
 	}
 
@@ -219,6 +200,99 @@ func (a *AuthController) VerifyEmailCode(c *gin.Context) {
 		c.JSON(status, gin.H{"code": status, "message": message})
 		return
 	}
+	a.issueSession(c, user)
+}
+
+// checkEmailCode 校验邮箱验证码（未使用、未过期、5 次尝试上限、HMAC 比对），
+// 失败时已写入错误响应；成功返回待消费的记录，由调用方在事务里标记 used_at
+func (a *AuthController) checkEmailCode(c *gin.Context, email, code string) (models.EmailLoginCode, bool) {
+	var record models.EmailLoginCode
+	if err := a.DB.Where("email = ? AND used_at IS NULL", email).Order("created_at DESC").First(&record).Error; err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "验证码无效或已使用"})
+		return record, false
+	}
+	if time.Now().After(record.ExpiresAt) {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "验证码已过期，请重新获取"})
+		return record, false
+	}
+	if record.Attempts >= 5 {
+		c.JSON(http.StatusTooManyRequests, gin.H{"code": 429, "message": "验证码错误次数过多，请重新获取"})
+		return record, false
+	}
+	if !hmac.Equal([]byte(record.CodeHash), []byte(hashEmailCode(a.Secret, email, code))) {
+		updates := map[string]any{"attempts": gorm.Expr("attempts + 1")}
+		if record.Attempts+1 >= 5 {
+			now := time.Now()
+			updates["used_at"] = &now
+		}
+		_ = a.DB.Model(&models.EmailLoginCode{}).Where("id = ? AND used_at IS NULL", record.ID).Updates(updates).Error
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "验证码错误"})
+		return record, false
+	}
+	return record, true
+}
+
+// ResetPassword 忘记密码：邮箱验证码校验通过后重置密码。
+// 验证码一次性消费；成功后递增会话版本号，该账号所有旧会话立即失效
+func (a *AuthController) ResetPassword(c *gin.Context) {
+	var input struct {
+		Email       string `json:"email" binding:"required"`
+		Code        string `json:"code" binding:"required"`
+		NewPassword string `json:"newPassword" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "请输入邮箱、验证码和新密码"})
+		return
+	}
+	email := normalizeEmail(input.Email)
+	code := strings.TrimSpace(input.Code)
+	if err := validateEmail(email); err != nil || !emailCodePattern.MatchString(code) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "请输入有效的 6 位验证码"})
+		return
+	}
+	if len(input.NewPassword) < 8 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "密码至少需要 8 个字符"})
+		return
+	}
+	record, ok := a.checkEmailCode(c, email, code)
+	if !ok {
+		return
+	}
+	var user models.User
+	if err := a.DB.Where("email = ?", email).First(&user).Error; err != nil {
+		// 验证码已证明持有邮箱，此时才告知账号不存在，不构成账号枚举
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "该邮箱尚未绑定账号，请直接注册"})
+		return
+	}
+	if user.Status != "active" {
+		c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "账号已被限制登录"})
+		return
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(input.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "重置密码失败"})
+		return
+	}
+	err = a.DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&models.EmailLoginCode{}).Where("id = ? AND used_at IS NULL", record.ID).Update("used_at", time.Now())
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errCodeConsumed
+		}
+		return tx.Model(&user).Updates(map[string]any{"password_hash": string(hash), "session_version": gorm.Expr("session_version + 1")}).Error
+	})
+	if err != nil {
+		status := http.StatusInternalServerError
+		message := "重置密码失败"
+		if errors.Is(err, errCodeConsumed) {
+			status, message = http.StatusUnauthorized, "验证码无效或已使用"
+		}
+		c.JSON(status, gin.H{"code": status, "message": message})
+		return
+	}
+	// 邮箱归属已验证，直接签发会话免二次登录
 	a.issueSession(c, user)
 }
 

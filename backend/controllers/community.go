@@ -196,11 +196,20 @@ func (cc *CommunityController) CreatePost(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "分类不存在"})
 		return
 	}
+	validSeries, err := resolveSeries(cc.DB, input.SeriesID, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "检查系列失败"})
+		return
+	}
+	if !validSeries {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "系列不存在或不属于你"})
+		return
+	}
 	slug := input.Slug
 	if slug == "" {
 		slug = input.Title
 	}
-	post := models.Post{AuthorID: userID, Title: strings.TrimSpace(input.Title), Summary: strings.TrimSpace(input.Summary), Content: input.Content, CoverImage: strings.TrimSpace(input.CoverImage), Status: status, ReadingTime: readingTime(input.Content), CategoryID: input.CategoryID}
+	post := models.Post{AuthorID: userID, Title: strings.TrimSpace(input.Title), Summary: strings.TrimSpace(input.Summary), Content: input.Content, CoverImage: strings.TrimSpace(input.CoverImage), Status: status, ReadingTime: readingTime(input.Content), CategoryID: input.CategoryID, SeriesID: input.SeriesID}
 	if err := applyPostTiming(&post, status, input.ScheduledAt); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
 		return
@@ -259,6 +268,15 @@ func (cc *CommunityController) UpdatePost(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "分类不存在"})
 		return
 	}
+	validSeries, err := resolveSeries(cc.DB, input.SeriesID, post.AuthorID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "检查系列失败"})
+		return
+	}
+	if !validSeries {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "系列不存在或不属于文章作者"})
+		return
+	}
 	original := post
 	slug := input.Slug
 	if slug == "" {
@@ -271,6 +289,7 @@ func (cc *CommunityController) UpdatePost(c *gin.Context) {
 	post.Status = status
 	post.ReadingTime = readingTime(input.Content)
 	post.CategoryID = input.CategoryID
+	post.SeriesID = input.SeriesID
 	if err := applyPostTiming(&post, status, input.ScheduledAt); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": err.Error()})
 		return

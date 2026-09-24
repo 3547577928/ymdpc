@@ -1,5 +1,5 @@
 import { ArrowLeft, Bell, CheckCheck, Heart, MessageCircle, Newspaper, Reply, UserPlus } from 'lucide-react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { markAllNotificationsRead, markNotificationRead } from '../services/api'
@@ -47,7 +47,7 @@ export function NotificationsPage() {
   const pageSize = 20
   const queryClient = useQueryClient()
   const listQuery = useNotificationList(page, pageSize, filter)
-  const items = groupNotificationItems(listQuery.data?.items ?? [])
+  const items = useMemo(() => groupNotificationItems(listQuery.data?.items ?? []), [listQuery.data?.items])
   const unread = listQuery.data?.unread ?? 0
   const total = listQuery.data?.total ?? 0
   const loading = listQuery.isLoading

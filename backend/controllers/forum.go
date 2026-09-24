@@ -1,6 +1,8 @@
 package controllers
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,6 +17,9 @@ import (
 
 type ForumController struct{ DB *gorm.DB }
 
+// errInvalidForumImages 图片列表校验失败（事务内回滚用）
+var errInvalidForumImages = errors.New("invalid forum images")
+
 type ForumTopicDTO struct {
 	ID           uint      `json:"id"`
 	Content      string    `json:"content"`
@@ -22,9 +27,10 @@ type ForumTopicDTO struct {
 	Images       []string  `json:"images"`
 	LikesCount   int       `json:"likesCount"`
 	RepliesCount int       `json:"repliesCount"`
-	Liked        bool      `json:"liked"`
+	Liked        bool       `json:"liked"`
 	CreatedAt    time.Time `json:"createdAt"`
 	UpdatedAt    time.Time `json:"updatedAt"`
+	EditedAt     *time.Time `json:"editedAt,omitempty"`
 	Author       UserDTO   `json:"author"`
 }
 
@@ -35,8 +41,9 @@ type ForumReplyDTO struct {
 	ReplyToUserID *uint     `json:"replyToUserId"`
 	Content       string    `json:"content"`
 	LikesCount    int       `json:"likesCount"`
-	Liked         bool      `json:"liked"`
+	Liked         bool       `json:"liked"`
 	CreatedAt     time.Time `json:"createdAt"`
+	EditedAt      *time.Time `json:"editedAt,omitempty"`
 	Author        UserDTO   `json:"author"`
 }
 
@@ -91,11 +98,11 @@ func forumTopicDTO(topic models.ForumTopic, liked bool) ForumTopicDTO {
 	for _, image := range topic.Images {
 		images = append(images, image.URL)
 	}
-	return ForumTopicDTO{ID: topic.ID, Content: topic.Content, Kind: topic.Kind, Images: images, LikesCount: topic.LikesCount, RepliesCount: topic.RepliesCount, Liked: liked, CreatedAt: topic.CreatedAt, UpdatedAt: topic.UpdatedAt, Author: toUserDTO(topic.Author)}
+	return ForumTopicDTO{ID: topic.ID, Content: topic.Content, Kind: topic.Kind, Images: images, LikesCount: topic.LikesCount, RepliesCount: topic.RepliesCount, Liked: liked, CreatedAt: topic.CreatedAt, UpdatedAt: topic.UpdatedAt, EditedAt: topic.EditedAt, Author: toUserDTO(topic.Author)}
 }
 
 func forumReplyDTO(reply models.ForumReply, liked bool) ForumReplyDTO {
-	return ForumReplyDTO{ID: reply.ID, TopicID: reply.TopicID, ParentID: reply.ParentID, ReplyToUserID: reply.ReplyToUserID, Content: reply.Content, LikesCount: reply.LikesCount, Liked: liked, CreatedAt: reply.CreatedAt, Author: toUserDTO(reply.Author)}
+	return ForumReplyDTO{ID: reply.ID, TopicID: reply.TopicID, ParentID: reply.ParentID, ReplyToUserID: reply.ReplyToUserID, Content: reply.Content, LikesCount: reply.LikesCount, Liked: liked, CreatedAt: reply.CreatedAt, EditedAt: reply.EditedAt, Author: toUserDTO(reply.Author)}
 }
 
 func (fc *ForumController) ListTopics(c *gin.Context) {
@@ -181,6 +188,10 @@ func (fc *ForumController) CreateTopic(c *gin.Context) {
 	if err := fc.DB.Preload("Author").Preload("Images", func(db *gorm.DB) *gorm.DB { return db.Order("position ASC, id ASC") }).First(&topic, topic.ID).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取新帖子失败"})
 		return
+	}
+	// 广播新帖，论坛列表页实时出现（事务已提交）
+	if payload, err := json.Marshal(forumTopicDTO(topic, false)); err == nil {
+		eventBus.Publish("forum", "topic", string(payload))
 	}
 	c.JSON(http.StatusCreated, gin.H{"code": 0, "message": "success", "data": forumTopicDTO(topic, false)})
 }
@@ -326,6 +337,114 @@ func (fc *ForumController) LikeTopic(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"liked": true, "likesCount": likesCount}})
+}
+
+// UpdateTopic 编辑话题：作者本人或管理员；content/kind 必填，images 省略时保留原图
+func (fc *ForumController) UpdateTopic(c *gin.Context) {
+	userID := currentUserID(c)
+	topicID, ok := forumParamID(c)
+	if !ok {
+		return
+	}
+	var topic models.ForumTopic
+	if err := fc.DB.Preload("Images").First(&topic, topicID).Error; err != nil || topic.Status != "published" {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "帖子不存在"})
+		return
+	}
+	if topic.AuthorID != userID && !currentUserIsAdmin(c) {
+		c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "只能编辑自己的帖子"})
+		return
+	}
+	var input struct {
+		Content string   `json:"content" binding:"required"`
+		Kind    string   `json:"kind"`
+		Images  []string `json:"images"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil || strings.TrimSpace(input.Content) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "帖子内容不能为空"})
+		return
+	}
+	input.Content = strings.TrimSpace(input.Content)
+	if utf8.RuneCountInString(input.Content) > 2000 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "帖子不能超过 2000 字"})
+		return
+	}
+	kind, ok := normalizeForumKind(input.Kind)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "帖子分类无效"})
+		return
+	}
+	now := time.Now()
+	if err := fc.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&topic).Updates(map[string]any{"content": input.Content, "kind": kind, "edited_at": &now}).Error; err != nil {
+			return err
+		}
+		// images 为 nil 表示未改动（前端编辑界面不传），显式传数组时才替换
+		if input.Images != nil {
+			images, valid := normalizeForumImages(input.Images)
+			if !valid {
+				return errInvalidForumImages
+			}
+			if err := tx.Where("topic_id = ?", topic.ID).Delete(&models.ForumTopicImage{}).Error; err != nil {
+				return err
+			}
+			for position, url := range images {
+				if err := tx.Create(&models.ForumTopicImage{TopicID: topic.ID, URL: url, Position: position}).Error; err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "编辑帖子失败"})
+		return
+	}
+	if err := fc.DB.Preload("Author").Preload("Images").First(&topic, topic.ID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取帖子失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": forumTopicDTO(topic, forumTopicLikedSet(fc.DB, userID, []uint{topic.ID})[topic.ID])})
+}
+
+// UpdateReply 编辑回复：作者本人或管理员
+func (fc *ForumController) UpdateReply(c *gin.Context) {
+	userID := currentUserID(c)
+	replyID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "回复不存在"})
+		return
+	}
+	var reply models.ForumReply
+	if err := fc.DB.First(&reply, replyID).Error; err != nil || reply.Status != "published" {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "回复不存在"})
+		return
+	}
+	if reply.AuthorID != userID && !currentUserIsAdmin(c) {
+		c.JSON(http.StatusForbidden, gin.H{"code": 403, "message": "只能编辑自己的回复"})
+		return
+	}
+	var input struct {
+		Content string `json:"content" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil || strings.TrimSpace(input.Content) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "回复内容不能为空"})
+		return
+	}
+	input.Content = strings.TrimSpace(input.Content)
+	if utf8.RuneCountInString(input.Content) > 1000 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "回复不能超过 1000 字"})
+		return
+	}
+	now := time.Now()
+	if err := fc.DB.Model(&reply).Updates(map[string]any{"content": input.Content, "edited_at": &now}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "编辑回复失败"})
+		return
+	}
+	if err := fc.DB.Preload("Author").First(&reply, reply.ID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "读取回复失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": forumReplyDTO(reply, forumReplyLikedSet(fc.DB, userID, []uint{reply.ID})[reply.ID])})
 }
 
 func (fc *ForumController) UnlikeTopic(c *gin.Context) {

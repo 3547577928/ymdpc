@@ -421,6 +421,66 @@ h1 em, h2 em { font-style: normal; color: #8b8b87; }
 
 .comments-load-more { display: block; margin: 18px auto 0; }
 
+.comment-typing { color: var(--muted); font-size: 11px; margin-top: 8px; display: inline-block; animation: skeleton-shimmer 1.6s ease infinite; }
+.comment-edited { color: var(--muted); font-size: 10px; }
+.comment-edit textarea { width: 100%; border: 1px solid var(--line); background: var(--paper); color: var(--ink); padding: 10px; outline: 0; resize: vertical; line-height: 1.6; margin: 8px 0; }
+.comment-edit textarea:focus { border-color: var(--ink); }
+.comment-edit-actions { display: flex; justify-content: flex-end; gap: 10px; align-items: center; }
+.comment-edit-actions > button:first-child { background: transparent; color: var(--muted); font-size: 11px; padding: 0; }
+.comment-edit-actions > button:first-child:hover { color: var(--ink); }
+.comment-edit-actions .button { min-height: 32px; padding: 0 14px; font-size: 11px; }
+.forum-topic-edit { margin-top: 12px; }
+.forum-topic-edit .forum-kind-selector { display: flex; gap: 12px; margin: 8px 0; }
+
+/* 文章系列 */
+.series-box { border: 1px solid var(--line); background: var(--paper); padding: 24px 28px; margin: 48px auto 0; }
+.series-box-head { margin-bottom: 14px; }
+.series-box-head .eyebrow { margin-bottom: 6px; }
+.series-box-head strong { font-size: 19px; font-weight: 600; }
+.series-box-head p { color: var(--muted); font-size: 12px; margin-top: 6px; }
+.series-box ol, .series-catalog { list-style: none; padding: 0; margin: 0; }
+.series-box li a, .series-catalog li a { display: flex; gap: 14px; align-items: baseline; padding: 9px 0; border-top: 1px solid var(--soft-line); font-size: 14px; }
+.series-box li a span, .series-catalog li a span { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--muted); }
+.series-box li.is-current a { font-weight: 700; }
+.series-box li.is-current a span { color: var(--accent); }
+.series-page { padding: 48px 0 100px; }
+.series-page-header { margin: 34px 0 30px; }
+.series-page-header .eyebrow { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+.series-page-header h1 { font-size: 40px; font-weight: 500; letter-spacing: -.03em; }
+.series-page-header p { color: var(--muted); font-size: 14px; margin-top: 10px; max-width: 560px; }
+.series-catalog { border-top: 1px solid var(--line); }
+.series-catalog li a { font-size: 16px; padding: 15px 0; }
+.series-catalog li a:hover strong { text-decoration: underline; text-underline-offset: 3px; }
+
+/* 作者数据看板 */
+.stats-cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin: 28px 0 38px; }
+.stats-card { border: 1px solid var(--line); background: var(--paper); padding: 18px; display: grid; gap: 6px; color: var(--muted); }
+.stats-card strong { font-size: 30px; font-weight: 500; color: var(--ink); letter-spacing: -.04em; }
+.stats-card span { font-size: 11px; }
+.stats-card small { font-size: 10px; }
+@media (max-width: 900px) { .stats-cards { grid-template-columns: repeat(2, 1fr); } }
+.admin-top-post { text-decoration: none; color: inherit; }
+.admin-top-post:hover b { text-decoration: underline; text-underline-offset: 3px; }
+
+/* 搜索落地页 */
+.search-page { padding: 48px 0 100px; }
+.search-page-box { display: flex; align-items: center; gap: 9px; border: 1px solid var(--line); background: var(--white); padding: 0 14px; margin: 28px 0 8px; color: var(--muted); }
+.search-page-box input { flex: 1; border: 0; background: transparent; color: var(--ink); padding: 13px 0; outline: 0; font-size: 15px; }
+.search-results { margin-top: 26px; border-top: 1px solid var(--line); }
+.search-result { padding: 22px 0; border-bottom: 1px solid var(--soft-line); }
+.search-result h3 { font-size: 21px; font-weight: 600; margin-bottom: 9px; }
+.search-result h3 a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.search-result-snippet { color: var(--muted); font-size: 13px; line-height: 1.8; margin-bottom: 11px; }
+mark { background: color-mix(in srgb, var(--accent) 26%, transparent); color: inherit; padding: 0 1px; }
+.search-section { margin-top: 30px; }
+.search-section .eyebrow { margin-bottom: 12px; }
+.search-users { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.search-user { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); padding: 10px 12px; }
+.search-user small { display: block; color: var(--muted); font-size: 10px; }
+.search-topic { display: block; border-top: 1px solid var(--soft-line); padding: 14px 0; }
+.search-topic p { font-size: 13px; line-height: 1.7; margin: 6px 0 5px; }
+.search-topic small { color: var(--muted); font-size: 10px; }
+
 /* 骨架屏 */
 .skeleton { background: linear-gradient(90deg, var(--soft-line) 25%, var(--soft) 37%, var(--soft-line) 63%); background-size: 400% 100%; animation: skeleton-shimmer 1.4s ease infinite; }
 @keyframes skeleton-shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }

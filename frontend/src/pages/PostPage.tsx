@@ -1,7 +1,7 @@
 import { ArrowLeft, ArrowRight, Bookmark, CalendarDays, ChevronDown, ChevronRight, Clock3, Eye, Flag, Heart, MessageCircle, Pencil, Pin, Share2, UserPlus, UserRoundCheck, Trash2 } from 'lucide-react'
-import { Link, useParams } from 'react-router-dom'
-import { useEffect, useMemo, useState } from 'react'
-import { createComment, createReport, deleteComment, favoritePost, followUser, getComments, getPostBySlug, getUserProfile, likeComment, likePost, pinComment, recordPostView, unfavoritePost, unfollowUser, unlikeComment, unlikePost, type AdjacentPost } from '../services/api'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { createComment, createReport, deleteComment, favoritePost, followUser, getComments, getPostBySlug, getUserProfile, likeComment, likePost, pinComment, recordPostView, sendCommentTyping, unfavoritePost, unfollowUser, unlikeComment, unlikePost, updateComment, type AdjacentPost, type SeriesDetail } from '../services/api'
 import { useAuth } from '../services/auth'
 import { ReadingProgress } from '../components/ReadingProgress'
 import { CoverImage } from '../components/CoverImage'
@@ -39,9 +39,11 @@ function buildCommentTree(flat: Comment[]): CommentNode[] {
 
 export function PostPage() {
   const { slug } = useParams()
+  const navigate = useNavigate()
   const [post, setPost] = useState<Post>()
   const [previous, setPrevious] = useState<AdjacentPost | null>(null)
   const [next, setNext] = useState<AdjacentPost | null>(null)
+  const [series, setSeries] = useState<SeriesDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const { user } = useAuth()
@@ -51,6 +53,8 @@ export function PostPage() {
   const [commentsTotal, setCommentsTotal] = useState(0)
   const [commentsLoading, setCommentsLoading] = useState(false)
   const [commentInput, setCommentInput] = useState('')
+  const [typingUser, setTypingUser] = useState<string>()
+  const typingSentAt = useRef(0)
   const [replyTo, setReplyTo] = useState<Comment>()
   const [commentSaving, setCommentSaving] = useState(false)
   const [following, setFollowing] = useState(false)
@@ -59,6 +63,8 @@ export function PostPage() {
   const [reportReason, setReportReason] = useState('')
   const [notice, setNotice] = useState<{ title: string; message: string }>()
   const [deleteRequest, setDeleteRequest] = useState<Comment>()
+  const [editingComment, setEditingComment] = useState<number>()
+  const [editCommentInput, setEditCommentInput] = useState('')
   const [collapsedThreads, setCollapsedThreads] = useState<Set<number>>(new Set())
   const headings = useMemo(() => extractMarkdownHeadings(post?.content ?? ''), [post?.content])
 
@@ -77,6 +83,53 @@ export function PostPage() {
     }
   }
 
+  // 实时评论流：新评论/删除/「正在输入」经 SSE 即时出现在评论区；
+  // 自己的评论提交也会触发事件，按 id 去重
+  const postSlug = post?.slug
+  useEffect(() => {
+    if (!postSlug) return
+    const source = new EventSource(`/api/posts/${encodeURIComponent(postSlug)}/comments/stream`)
+    source.addEventListener('comment', (event) => {
+      try {
+        const comment = JSON.parse((event as MessageEvent).data) as Comment
+        setComments((current) => current.some((item) => item.id === comment.id) ? current : [...current, comment])
+        if (!comment.parentId) setCommentsTotal((total) => total + 1)
+        setPost((current) => current ? { ...current, commentsCount: current.commentsCount + 1 } : current)
+      } catch { /* 无法解析的事件忽略 */ }
+    })
+    source.addEventListener('comment_edited', (event) => {
+      try {
+        const updated = JSON.parse((event as MessageEvent).data) as Comment
+        setComments((current) => current.map((item) => item.id === updated.id ? { ...item, ...updated, liked: item.liked } : item))
+      } catch { /* 无法解析的事件忽略 */ }
+    })
+    source.addEventListener('comment_deleted', (event) => {
+      try {
+        const { ids } = JSON.parse((event as MessageEvent).data) as { ids: number[] }
+        setComments((current) => {
+          const removedTopLevel = current.filter((item) => ids.includes(item.id) && !item.parentId).length
+          setCommentsTotal((total) => Math.max(0, total - removedTopLevel))
+          return current.filter((item) => !ids.includes(item.id))
+        })
+        setPost((current) => current ? { ...current, commentsCount: Math.max(0, current.commentsCount - ids.length) } : current)
+      } catch { /* 无法解析的事件忽略 */ }
+    })
+    source.addEventListener('typing', (event) => {
+      try {
+        const { nickname } = JSON.parse((event as MessageEvent).data) as { nickname: string }
+        setTypingUser(nickname)
+      } catch { /* 无法解析的事件忽略 */ }
+    })
+    return () => source.close()
+  }, [postSlug])
+
+  // 「正在输入」提示 4 秒未续期即消失
+  useEffect(() => {
+    if (!typingUser) return
+    const timer = window.setTimeout(() => setTypingUser(undefined), 4000)
+    return () => window.clearTimeout(timer)
+  }, [typingUser])
+
   useEffect(() => {
     if (!slug) return
     let active = true
@@ -88,6 +141,9 @@ export function PostPage() {
         setPost(postDetail.post)
         setPrevious(postDetail.previous)
         setNext(postDetail.next)
+        setSeries(postDetail.series ?? null)
+        // 旧 slug 经 301 拿到文章后，地址栏同步为当前 slug（分享/书签才是有效链接）
+        if (postDetail.post.slug !== slug) navigate(`/posts/${postDetail.post.slug}`, { replace: true })
         void loadComments(postDetail.post.slug, 1)
         void getUserProfile(postDetail.post.author.username).then((profile) => { if (active) setFollowing(profile.followingMe) }).catch(() => undefined)
         const viewKey = `qs:viewed:${postDetail.post.slug}`
@@ -107,7 +163,7 @@ export function PostPage() {
       .catch((reason: Error) => { if (active) setError(reason.message) })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
-  }, [slug])
+  }, [slug, navigate])
 
   const toggleLike = async () => {
     if (!post || !user) return
@@ -244,13 +300,26 @@ export function PostPage() {
 
   // 平铺评论重建为两层树后再渲染，保证回复显示在被回复的评论下面
   const commentTree = buildCommentTree(comments)
+  const saveEditComment = async (comment: Comment) => {
+    if (!post || !editCommentInput.trim()) return
+    try {
+      const updated = await updateComment(comment.id, editCommentInput.trim(), post.slug)
+      setComments((current) => current.map((item) => item.id === comment.id ? { ...item, ...updated, liked: item.liked } : item))
+      setEditingComment(undefined)
+    } catch (reason) {
+      setNotice({ title: '编辑失败', message: reason instanceof Error ? reason.message : '编辑评论失败' })
+    }
+  }
+
   const renderComment = (comment: Comment, isReply: boolean) => (
     <div className={`comment-item ${isReply ? 'is-reply' : ''}`} key={comment.id}>
       <div className="comment-avatar">{comment.author.avatar ? <img src={comment.author.avatar} alt="" /> : comment.author.nickname.slice(0, 1)}</div>
       <div className="comment-body">
-        <div className="comment-meta"><Link to={`/users/${comment.author.username}`}>{comment.author.nickname}</Link><span>{formatDate(comment.createdAt)}</span>{comment.pinned && <span className="comment-pinned"><Pin size={11} /> 置顶</span>}</div>
-        <p>{comment.content}</p>
-        <div className="comment-actions"><button onClick={() => setReplyTo(comment)}>回复</button><button className={comment.liked ? 'is-liked' : ''} onClick={() => user ? void toggleCommentLike(comment) : undefined}><Heart size={13} fill={comment.liked ? 'currentColor' : 'none'} /> {comment.likesCount}</button>{!isReply && user && (user.id === post.author.id || user.role === 'admin') && <button onClick={() => void togglePinned(comment)}><Pin size={13} /> {comment.pinned ? '取消置顶' : '置顶'}</button>}{user && user.id !== comment.author.id && <button onClick={() => void reportComment(comment)}><Flag size={13} /> 举报</button>}{user?.id === comment.author.id && <button onClick={() => void removeComment(comment)}><Trash2 size={13} /> 删除</button>}</div>
+        <div className="comment-meta"><Link to={`/users/${comment.author.username}`}>{comment.author.nickname}</Link><span>{formatDate(comment.createdAt)}</span>{comment.editedAt && <span className="comment-edited">已编辑</span>}{comment.pinned && <span className="comment-pinned"><Pin size={11} /> 置顶</span>}</div>
+        {editingComment === comment.id
+          ? <div className="comment-edit"><textarea value={editCommentInput} onChange={(event) => setEditCommentInput(event.target.value)} rows={3} maxLength={2000} autoFocus /><div className="comment-edit-actions"><button onClick={() => setEditingComment(undefined)}>取消</button><button className="button button-dark" onClick={() => void saveEditComment(comment)} disabled={!editCommentInput.trim()}>保存</button></div></div>
+          : <p>{comment.content}</p>}
+        <div className="comment-actions"><button onClick={() => setReplyTo(comment)}>回复</button><button className={comment.liked ? 'is-liked' : ''} onClick={() => user ? void toggleCommentLike(comment) : undefined}><Heart size={13} fill={comment.liked ? 'currentColor' : 'none'} /> {comment.likesCount}</button>{!isReply && user && (user.id === post.author.id || user.role === 'admin') && <button onClick={() => void togglePinned(comment)}><Pin size={13} /> {comment.pinned ? '取消置顶' : '置顶'}</button>}{user && user.id !== comment.author.id && <button onClick={() => void reportComment(comment)}><Flag size={13} /> 举报</button>}{user?.id === comment.author.id && <button onClick={() => { setEditingComment(comment.id); setEditCommentInput(comment.content) }}><Pencil size={13} /> 编辑</button>}{user?.id === comment.author.id && <button onClick={() => void removeComment(comment)}><Trash2 size={13} /> 删除</button>}</div>
       </div>
     </div>
   )
@@ -272,11 +341,15 @@ export function PostPage() {
         <aside className="article-aside"><div className="aside-label">On this page</div>{headings.length ? headings.map((heading) => <a className={`toc-level-${heading.level}`} href={`#${heading.id}`} key={heading.id}>{heading.text}</a>) : <a href="#article-content">正文内容</a>}</aside>
         <div id="article-content"><MarkdownContent className="article-content" content={post.content} /><div id="article-end" /></div>
       </div>
+      {series && <div className="container series-box">
+        <div className="series-box-head"><span className="eyebrow">Series</span><Link to={`/series/${series.slug}`}><strong>{series.title}</strong></Link>{series.description && <p>{series.description}</p>}</div>
+        <ol>{series.posts.map((item, index) => <li key={item.slug} className={item.slug === post.slug ? 'is-current' : ''}><Link to={`/posts/${item.slug}`}><span>{String(index + 1).padStart(2, '0')}</span>{item.title}</Link></li>)}</ol>
+      </div>}
       <div className="container article-nav">
         {previous ? <Link to={`/posts/${previous.slug}`} className="article-nav-item"><span><ArrowLeft size={15} /> 上一篇</span><strong>{previous.title}</strong></Link> : <span />}
         {next ? <Link to={`/posts/${next.slug}`} className="article-nav-item align-right"><span>下一篇 <ArrowRight size={15} /></span><strong>{next.title}</strong></Link> : <span />}
       </div>
-      <section className="container comments-section" id="comments"><div className="comments-heading"><div><div className="eyebrow">Discussion</div><h2>评论 {post.commentsCount}</h2></div>{!user && <Link className="text-button" to={`/login?from=${encodeURIComponent(`/posts/${post.slug}`)}`}>登录后参与 <ArrowRight size={15} /></Link>}</div>{user && <div className="comment-composer">{replyTo && <div className="replying">回复 @{replyTo.author.username} <button onClick={() => setReplyTo(undefined)}>取消</button></div>}<textarea value={commentInput} onChange={(event) => setCommentInput(event.target.value)} placeholder="写下你的看法" rows={4} /><button className="button button-dark" onClick={() => void submitComment()} disabled={commentSaving || !commentInput.trim()}><MessageCircle size={15} /> {commentSaving ? '发送中' : '发表评论'}</button></div>}<div className="comments-list">{commentTree.length ? commentTree.map((node) => { const collapsed = collapsedThreads.has(node.comment.id); return <div className="comment-thread" key={node.comment.id}>{renderComment(node.comment, false)}{node.replies.length > 0 && <><button className="comment-collapse" onClick={() => toggleThread(node.comment.id)}>{collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />} {collapsed ? `展开 ${node.replies.length} 条回复` : `收起 ${node.replies.length} 条回复`}</button>{!collapsed && <div className="comment-replies">{node.replies.map((reply) => renderComment(reply, true))}</div>}</>}</div> }) : <div className="empty-state comments-empty"><h2>还没有评论</h2><p>成为第一个留下观点的人。</p></div>}</div>{commentTree.length < commentsTotal && <button className="text-button comments-load-more" onClick={() => void loadComments(post.slug, commentPage + 1)} disabled={commentsLoading}>{commentsLoading ? '正在读取。' : '加载更多评论（还有 ' + (commentsTotal - commentTree.length) + ' 条）'}</button>}</section>
+      <section className="container comments-section" id="comments"><div className="comments-heading"><div><div className="eyebrow">Discussion</div><h2>评论 {post.commentsCount}</h2>{typingUser && <span className="comment-typing">{typingUser} 正在输入…</span>}</div>{!user && <Link className="text-button" to={`/login?from=${encodeURIComponent(`/posts/${post.slug}`)}`}>登录后参与 <ArrowRight size={15} /></Link>}</div>{user && <div className="comment-composer">{replyTo && <div className="replying">回复 @{replyTo.author.username} <button onClick={() => setReplyTo(undefined)}>取消</button></div>}<textarea value={commentInput} onChange={(event) => { setCommentInput(event.target.value); if (user && event.target.value.trim() && Date.now() - typingSentAt.current > 3000) { typingSentAt.current = Date.now(); void sendCommentTyping(post.slug).catch(() => undefined) } }} placeholder="写下你的看法" rows={4} /><button className="button button-dark" onClick={() => void submitComment()} disabled={commentSaving || !commentInput.trim()}><MessageCircle size={15} /> {commentSaving ? '发送中' : '发表评论'}</button></div>}<div className="comments-list">{commentTree.length ? commentTree.map((node) => { const collapsed = collapsedThreads.has(node.comment.id); return <div className="comment-thread" key={node.comment.id}>{renderComment(node.comment, false)}{node.replies.length > 0 && <><button className="comment-collapse" onClick={() => toggleThread(node.comment.id)}>{collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />} {collapsed ? `展开 ${node.replies.length} 条回复` : `收起 ${node.replies.length} 条回复`}</button>{!collapsed && <div className="comment-replies">{node.replies.map((reply) => renderComment(reply, true))}</div>}</>}</div> }) : <div className="empty-state comments-empty"><h2>还没有评论</h2><p>成为第一个留下观点的人。</p></div>}</div>{commentTree.length < commentsTotal && <button className="text-button comments-load-more" onClick={() => void loadComments(post.slug, commentPage + 1)} disabled={commentsLoading}>{commentsLoading ? '正在读取。' : '加载更多评论（还有 ' + (commentsTotal - commentTree.length) + ' 条）'}</button>}</section>
       </article>
       <PromptDialog open={Boolean(reportRequest)} title={reportRequest?.title ?? ''} message="请输入举报理由，管理员审核后会处理。" value={reportReason} placeholder="例如：内容涉及广告、骚扰或违规信息" onChange={setReportReason} onSubmit={submitReport} onCancel={() => { setReportRequest(undefined); setReportReason('') }} />
       <ConfirmDialog open={Boolean(deleteRequest)} title="删除评论" message="确定删除这条评论吗？它下面的回复也会一并删除。" onCancel={() => setDeleteRequest(undefined)} onConfirm={confirmRemoveComment} />

@@ -1,6 +1,6 @@
 import { QueryClient, keepPreviousData, useQuery } from '@tanstack/react-query'
-import { getCategories, getFeed, getMyFavorites, getMyPosts, getNotifications, getTags, getTrendingTags } from './api'
-import type { NotificationItem } from '../types'
+import { getCategories, getFeed, getForumTopics, getMyFavorites, getMyPosts, getMyStats, getNotifications, getTag, getTags, getTrendingTags, searchPosts } from './api'
+import type { ForumKind, NotificationItem } from '../types'
 
 // 全局查询客户端：列表/详情查询 30s 内视为新鲜，翻页保留上一页数据避免闪烁；
 // 窗口隐藏时自动暂停轮询类查询（react-query 默认行为）
@@ -31,12 +31,30 @@ export function useFeed(params: FeedParams, staleTime = 0) {
   return useQuery({ queryKey: ['feed', params], queryFn: () => getFeed(params), staleTime })
 }
 
+export type ForumTopicsParams = { mode?: 'latest' | 'hot'; kind?: ForumKind | 'all'; q?: string; page?: number; pageSize?: number }
+
+export function useForumTopics(params: ForumTopicsParams) {
+  return useQuery({ queryKey: ['forum-topics', params], queryFn: () => getForumTopics(params) })
+}
+
 export function useMyPosts(status: string, page: number, pageSize: number) {
   return useQuery({ queryKey: ['my-posts', { status, page, pageSize }], queryFn: () => getMyPosts({ status, page, pageSize }) })
 }
 
 export function useMyFavorites(page: number, pageSize: number) {
   return useQuery({ queryKey: ['my-favorites', { page, pageSize }], queryFn: () => getMyFavorites({ page, pageSize }) })
+}
+
+export function useMyStats(enabled: boolean) {
+  return useQuery({ queryKey: ['my-stats'], queryFn: getMyStats, enabled })
+}
+
+export function useTag(slug: string) {
+  return useQuery({ queryKey: ['tag', slug], queryFn: () => getTag(slug) })
+}
+
+export function useSearch(q: string, page: number, pageSize = 12) {
+  return useQuery({ queryKey: ['search', { q, page, pageSize }], queryFn: () => searchPosts(q, { page, pageSize }), enabled: q.trim().length > 0 })
 }
 
 export type NotificationFilter = 'all' | 'unread' | NotificationItem['type']

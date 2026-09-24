@@ -8,9 +8,12 @@ type ApiPayload<T> = { code: number; message: string; data: T }
 export type AuthUser = UserSummary & { role: string; status: string }
 export type Tag = { id: number; name: string; slug: string }
 export type PostPage = { items: PostSummary[]; total: number; page: number; pageSize: number }
-export type PostInput = Pick<Post, 'title' | 'summary' | 'content' | 'coverImage' | 'tags' | 'status' | 'featured'> & { slug?: string; categoryId?: number | null; scheduledAt?: string | null }
+export type PostInput = Pick<Post, 'title' | 'summary' | 'content' | 'coverImage' | 'tags' | 'status' | 'featured'> & { slug?: string; categoryId?: number | null; seriesId?: number | null; scheduledAt?: string | null }
 export type AdjacentPost = Pick<PostSummary, 'title' | 'slug'>
-export type PostDetail = { post: Post; previous: AdjacentPost | null; next: AdjacentPost | null }
+export type SeriesBrief = { id: number; title: string; slug: string }
+export type SeriesListItem = SeriesBrief & { description: string; postCount: number; createdAt: string }
+export type SeriesDetail = SeriesBrief & { description: string; author: UserSummary; posts: AdjacentPost[] }
+export type PostDetail = { post: Post; previous: AdjacentPost | null; next: AdjacentPost | null; series?: SeriesDetail | null }
 export type AdminDailyMetric = { date: string; users: number; posts: number; comments: number }
 export type AdminTopPost = { id: number; title: string; slug: string; views: number; likesCount: number; commentsCount: number; author: UserSummary }
 export type AdminStats = { total: number; users: number; posts: number; published: number; views: number; likes: number; comments: number; follows: number; todayUsers: number; todayPosts: number; todayComments: number; pendingReports: number; activeUsers: { user: UserSummary; postCount: number; commentCount: number }[]; dailyMetrics: AdminDailyMetric[]; topPosts: AdminTopPost[] }
@@ -86,8 +89,50 @@ export function getTags() {
   return request<Tag[]>('/tags')
 }
 
+export function getSeries(slug: string) {
+  return request<SeriesDetail>(`/series/${encodeURIComponent(slug)}`)
+}
+
+export function getAuthorSeries(username: string) {
+  return request<SeriesListItem[]>(`/users/${encodeURIComponent(username)}/series`)
+}
+
+export function createSeries(input: { title: string; description: string }) {
+  return request<SeriesListItem>('/series', { method: 'POST', body: JSON.stringify(input) })
+}
+
+export type TagInfo = { id: number; name: string; slug: string; postCount: number; subscribed: boolean }
+
+export function getTag(slug: string) {
+  return request<TagInfo>(`/tags/${encodeURIComponent(slug)}`)
+}
+
+export function subscribeTag(id: number) {
+  return request<{ subscribed: boolean }>(`/tags/${id}/subscribe`, { method: 'POST' })
+}
+
+export function unsubscribeTag(id: number) {
+  return request<{ subscribed: boolean }>(`/tags/${id}/subscribe`, { method: 'DELETE' })
+}
+
+export type SearchResult = PostSummary & { titleMarked: string; snippet: string }
+export type SearchPage = { items: SearchResult[]; total: number; page: number; pageSize: number; fts: boolean; topics: ForumTopic[]; users: UserSummary[] }
+
+export function searchPosts(q: string, params: { page?: number; pageSize?: number } = {}) {
+  const query = new URLSearchParams()
+  query.set('q', q)
+  if (params.page) query.set('page', String(params.page))
+  if (params.pageSize) query.set('pageSize', String(params.pageSize))
+  return request<SearchPage>(`/search?${query}`)
+}
+
 export function login(username: string, password: string) {
   return request<AuthUser>('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }), suppressAuthExpired: true })
+}
+
+// 忘记密码：验证码校验通过后重置密码并直接签发会话
+export function resetPassword(email: string, code: string, newPassword: string) {
+  return request<AuthUser>('/auth/password/reset', { method: 'POST', body: JSON.stringify({ email, code, newPassword }), suppressAuthExpired: true })
 }
 
 export function requestEmailCode(email: string) {
@@ -141,6 +186,15 @@ export function getForumTopic(id: number, params: { replyPage?: number; replyPag
   return request<ForumTopicDetail>(`/forum/${id}${query.size ? `?${query}` : ''}`)
 }
 
+// 编辑话题：images 不传表示保留原图
+export function updateForumTopic(id: number, input: { content: string; kind: ForumKind; images?: string[] }) {
+  return request<ForumTopic>(`/forum/${id}`, { method: 'PATCH', body: JSON.stringify(input) })
+}
+
+export function updateForumReply(id: number, content: string) {
+  return request<ForumReply>(`/forum/replies/${id}`, { method: 'PATCH', body: JSON.stringify({ content }) })
+}
+
 export function deleteForumTopic(id: number) {
   return request<void>(`/forum/${id}`, { method: 'DELETE' })
 }
@@ -167,6 +221,13 @@ export function likeForumReply(id: number) {
 
 export function unlikeForumReply(id: number) {
   return request<{ liked: boolean; likesCount: number }>(`/forum/replies/${id}/like`, { method: 'DELETE' })
+}
+
+export type AuthorDailyMetric = { date: string; posts: number; likes: number; comments: number }
+export type MyStats = { posts: number; published: number; drafts: number; views: number; likes: number; comments: number; followers: number; dailyMetrics: AuthorDailyMetric[]; topPosts: { id: number; title: string; slug: string; views: number; likesCount: number; commentsCount: number }[] }
+
+export function getMyStats() {
+  return request<MyStats>('/me/stats')
 }
 
 export function getUserProfile(username: string, params: { page?: number; pageSize?: number } = {}) {
@@ -204,8 +265,18 @@ export function getComments(slug: string, params: { page?: number; pageSize?: nu
   return request<CommentPage>(`/posts/${encodeURIComponent(slug)}/comments?${query}`)
 }
 
+// 「正在输入」提醒：客户端节流到每 3 秒最多一次
+export function sendCommentTyping(slug: string) {
+  return request<void>(`/posts/${encodeURIComponent(slug)}/typing`, { method: 'POST' })
+}
+
 export function createComment(slug: string, input: { content: string; parentId?: number; replyToUserId?: number }) {
   return request<Comment>(`/posts/${encodeURIComponent(slug)}/comments`, { method: 'POST', body: JSON.stringify(input) })
+}
+
+// 编辑评论：postSlug 用于服务端向该文章的读者广播编辑事件
+export function updateComment(id: number, content: string, postSlug?: string) {
+  return request<Comment>(`/comments/${id}${postSlug ? `?postSlug=${encodeURIComponent(postSlug)}` : ''}`, { method: 'PATCH', body: JSON.stringify({ content }) })
 }
 
 export function deleteComment(id: number) {
@@ -286,7 +357,8 @@ export function getTrendingTags(params: { days?: number; limit?: number } = {}) 
 
 export async function uploadImage(file: File, options: { avatar?: boolean } = {}) {
   const body = new FormData()
-  body.append('file', await prepareImageForUpload(file, options.avatar ? 800 : 2400))
+  // 头像最大展示位 96px，256px 覆盖 2x 高分屏；原来统一压到 800px 纯属浪费带宽
+  body.append('file', await prepareImageForUpload(file, options.avatar ? 256 : 2400))
   return request<{ url: string }>('/uploads/images', { method: 'POST', body })
 }
 

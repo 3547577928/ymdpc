@@ -64,18 +64,32 @@ func createNotification(db *gorm.DB, userID, actorID uint, notificationType stri
 	return nil
 }
 
-// notifyFollowersOfPost 在文章首次发布时通知作者的全部粉丝。
+// notifyFollowersOfPost 在文章首次发布时通知作者的全部粉丝，
+// 以及文章标签的订阅者（与粉丝去重，作者本人除外）
 func notifyFollowersOfPost(db *gorm.DB, authorID, postID uint) error {
 	var followerIDs []uint
 	if err := db.Model(&models.Follow{}).Where("following_id = ?", authorID).Pluck("follower_id", &followerIDs).Error; err != nil {
 		return err
 	}
+	var tagIDs []uint
+	if err := db.Model(&models.Tag{}).Joins("JOIN post_tags ON post_tags.tag_id = tags.id").Where("post_tags.post_id = ?", postID).Pluck("tags.id", &tagIDs).Error; err != nil {
+		return err
+	}
+	if len(tagIDs) > 0 {
+		var subscriberIDs []uint
+		if err := db.Model(&models.TagSubscription{}).Where("tag_id IN ?", tagIDs).Distinct().Pluck("user_id", &subscriberIDs).Error; err != nil {
+			return err
+		}
+		followerIDs = append(followerIDs, subscriberIDs...)
+	}
 	if len(followerIDs) == 0 {
 		return nil
 	}
+	notified := map[uint]bool{authorID: true}
 	notifications := make([]models.Notification, 0, len(followerIDs))
 	for _, followerID := range followerIDs {
-		if followerID != authorID {
+		if !notified[followerID] {
+			notified[followerID] = true
 			notifications = append(notifications, models.Notification{UserID: followerID, ActorID: authorID, Type: "post", ResourceID: postID})
 		}
 	}

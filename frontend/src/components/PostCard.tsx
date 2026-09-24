@@ -25,7 +25,7 @@ export const PostCard = memo(function PostCard({ post, featured = false, showAut
         <p>{post.summary}</p>
         {showAuthor && <Link className="post-author" to={`/users/${post.author.username}`}>@{post.author.nickname}</Link>}
         <div className="tag-row">
-          {post.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}
+          {post.tags.map((tag) => <Link className="tag" key={tag} to={`/tags/${encodeURIComponent(tag)}`}>{tag}</Link>)}
         </div>
       </div>
     </article>

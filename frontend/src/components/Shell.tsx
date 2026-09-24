@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { Bell, FileText, Github, House, Info, LogIn, Mail, MessagesSquare, Moon, PenLine, Rss, Sun, UserCircle, UserPlus, type LucideIcon } from 'lucide-react'
+import { Bell, FileText, Github, House, Info, LogIn, Mail, MessagesSquare, Moon, PenLine, Rss, Search, Sun, UserCircle, UserPlus, type LucideIcon } from 'lucide-react'
 import { applyTheme, getTheme, type Theme } from '../utils/theme'
 import { useEffect, useState } from 'react'
 import { BrandMark } from './BrandMark'
@@ -14,6 +14,7 @@ const navItems: NavItem[] = [
   { to: '/', label: '首页', icon: House },
   { to: '/posts', label: '文章', icon: FileText },
   { to: '/forum', label: '论坛', icon: MessagesSquare },
+  { to: '/search', label: '搜索', icon: Search },
   { to: '/about', label: '关于', icon: Info },
 ]
 
@@ -34,6 +35,7 @@ function NavUserMenu({ user, unread, onSignOut }: { user: AuthUser; unread: numb
         <div className="nav-dropdown">
           <Link to={`/users/${user.username}`}>个人主页</Link>
           <Link to="/me/posts">我的文章</Link>
+          <Link to="/me/stats">数据看板</Link>
           <Link to="/me/posts?status=draft">草稿箱</Link>
           <Link to="/me/favorites">我的收藏</Link>
           <Link to="/settings/profile">账号设置</Link>
@@ -143,6 +145,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <p>一个安静的写作社区：写下界面的细节、系统的取舍，以及还没有答案的问题。</p>
           </div>
           <div className="footer-links">
+            <a href="/api/feed.xml" target="_blank" rel="noreferrer" aria-label="RSS 订阅"><Rss size={17} /></a>
             <a href="https://github.com" target="_blank" rel="noreferrer" aria-label="GitHub"><Github size={17} /></a>
             <a href="mailto:hello@quietsig.dev" aria-label="邮件"><Mail size={17} /></a>
           </div>

@@ -16,6 +16,9 @@ type Post struct {
 	ModerationStatus string     `json:"moderationStatus" gorm:"size:20;index;not null;default:normal"`
 	CategoryID       *uint      `json:"categoryId" gorm:"index"`
 	Category         *Category  `json:"category" gorm:"foreignKey:CategoryID"`
+	// SeriesID 文章所属系列；空表示不属于任何系列
+	SeriesID *uint  `json:"seriesId" gorm:"index"`
+	Series   *Series `json:"series,omitempty" gorm:"foreignKey:SeriesID"`
 	Featured         bool       `json:"featured"`
 	Views            int        `json:"views"`
 	LikesCount       int        `json:"likesCount"`
@@ -33,6 +36,26 @@ type Tag struct {
 	ID        uint      `json:"id" gorm:"primaryKey"`
 	Name      string    `json:"name" gorm:"size:80;uniqueIndex;not null"`
 	Slug      string    `json:"slug" gorm:"size:100;uniqueIndex;not null"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// Series 文章系列/专栏：同一作者的一组有序文章
+type Series struct {
+	ID          uint      `json:"id" gorm:"primaryKey"`
+	AuthorID    uint      `json:"authorId" gorm:"index;not null"`
+	Author      User      `json:"author" gorm:"foreignKey:AuthorID"`
+	Title       string    `json:"title" gorm:"size:120;not null"`
+	Slug        string    `json:"slug" gorm:"size:140;uniqueIndex;not null"`
+	Description string    `json:"description" gorm:"size:500"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
+// TagSubscription 标签订阅：订阅的标签有新公开文章时收到站内通知
+type TagSubscription struct {
+	ID        uint      `json:"id" gorm:"primaryKey"`
+	UserID    uint      `json:"userId" gorm:"not null;uniqueIndex:idx_tag_subscriptions_user_tag"`
+	TagID     uint      `json:"tagId" gorm:"not null;uniqueIndex:idx_tag_subscriptions_user_tag"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 
@@ -67,6 +90,8 @@ type Comment struct {
 	LikesCount    int       `json:"likesCount"`
 	CreatedAt     time.Time `json:"createdAt"`
 	UpdatedAt     time.Time `json:"updatedAt"`
+	// EditedAt 内容最后一次被编辑的时间；仅编辑内容时更新，置顶/审核不影响
+	EditedAt *time.Time `json:"editedAt,omitempty"`
 }
 
 type PostLike struct {
