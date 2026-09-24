@@ -6,6 +6,7 @@ backend/data/
 backend/.gobin
 backend/.gocache
 backend/.gopath
+backend/.gotmp
 .DS_Store
 .env
 *.tar
