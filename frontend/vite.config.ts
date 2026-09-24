@@ -37,6 +37,9 @@ export default defineConfig(({ mode }) => {
       environment: 'jsdom',
       restoreMocks: true,
       setupFiles: './src/test/setup.ts',
+      // Playwright E2E 测试由独立的 test:e2e 脚本驱动，Vitest 不应采集；
+      // 保留默认 node_modules 排除，避免 vitest 逐文件加载依赖的测试
+      exclude: ['e2e/**', 'node_modules/**'],
     },
   }
 })
