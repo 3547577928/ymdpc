@@ -292,6 +292,12 @@ func (a *AuthController) ResetPassword(c *gin.Context) {
 		c.JSON(status, gin.H{"code": status, "message": message})
 		return
 	}
+	// 事务内通过 gorm.Expr 递增 session_version 不会回填到 user 结构体，
+	// 必须重新查询让内存值与数据库一致，否则 issueSession 会签发过期 token
+	if err := a.DB.First(&user, user.ID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "重置密码失败"})
+		return
+	}
 	// 邮箱归属已验证，直接签发会话免二次登录
 	a.issueSession(c, user)
 }

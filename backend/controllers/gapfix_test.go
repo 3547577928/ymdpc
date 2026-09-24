@@ -10,6 +10,7 @@ import (
 	"quietsignal/backend/models"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -44,6 +45,29 @@ func TestResetPasswordFlow(t *testing.T) {
 	}
 	if updated.SessionVersion != 2 {
 		t.Fatalf("expected session version bump, got %d", updated.SessionVersion)
+	}
+	// 签发的 cookie 必须能通过 RequireAuth（session_version 与 DB 一致）
+	cookie := resp.Header().Get("Set-Cookie")
+	if cookie == "" || !strings.Contains(cookie, "qs_token=") {
+		t.Fatalf("expected qs_token cookie after reset, got headers: %v", resp.Header())
+	}
+	tokenStart := strings.Index(cookie, "qs_token=") + len("qs_token=")
+	tokenEnd := strings.Index(cookie[tokenStart:], ";")
+	if tokenEnd < 0 {
+		tokenEnd = len(cookie) - tokenStart
+	}
+	tokenValue := cookie[tokenStart : tokenStart+tokenEnd]
+	// 中间件 setClaims 的等价校验：JWT 签名有效且 sv 声明与数据库现值一致
+	parsed, err := jwt.Parse(tokenValue, func(t *jwt.Token) (any, error) { return []byte("test-secret"), nil }, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
+	if err != nil || !parsed.Valid {
+		t.Fatalf("issued token invalid: %v", err)
+	}
+	claims, ok := parsed.Claims.(jwt.MapClaims)
+	if !ok {
+		t.Fatal("token claims missing")
+	}
+	if sv, ok := claims["sv"].(float64); !ok || int(sv) != 2 {
+		t.Fatalf("expected sv=2 in token, got %v", claims["sv"])
 	}
 	// 验证码一次性：复用同一条码应失败
 	again := performRequest(auth.ResetPassword, http.MethodPost, "/api/auth/password/reset", body, nil)
